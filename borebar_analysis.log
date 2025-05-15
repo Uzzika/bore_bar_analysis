@@ -6,3 +6,29 @@
 2025-05-16 00:38:21,390 - WARNING - Область устойчивости не обнаружена
 2025-05-16 00:38:34,994 - INFO - Запуск анализа с параметрами: E=2.00e+11 Па, S=2.00e-04 м\xb2, rho=7800.0 кг/м\xb3, mu=0.300, tau=0.260 с, L=5.00 м
 2025-05-16 00:38:35,004 - WARNING - Область устойчивости не обнаружена
+2025-05-16 01:01:37,996 - ERROR - Ошибка при анализе: can't multiply sequence by non-int of type 'float'
+Traceback (most recent call last):
+  File "c:\Users\uzika\python sourse\bore_bar_analysis\main.py", line 517, in analyze_longitudinal
+    x_pad = max(0.1*(np.nanmax(K1/1e6) - np.nanmin(K1/1e6), 1))
+                ~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+TypeError: can't multiply sequence by non-int of type 'float'
+2025-05-16 01:26:35,581 - ERROR - Ошибка в analyze_longitudinal: 'float' object is not iterable
+Traceback (most recent call last):
+  File "c:\Users\uzika\python sourse\bore_bar_analysis\main.py", line 447, in analyze_longitudinal
+    mu = min(max(params.get('mu', 0.1), 0, 0.99))  # Ограничение 0 < \u03bc < 1
+TypeError: 'float' object is not iterable
+2025-05-16 01:33:30,626 - ERROR - Ошибка в analyze_longitudinal: 'float' object is not iterable
+Traceback (most recent call last):
+  File "c:\Users\uzika\python sourse\bore_bar_analysis\main.py", line 447, in analyze_longitudinal
+    mu = min(max(params.get('mu', 0.1), 0, 0.99))  # Коэф. трения (0 < \u03bc < 1)
+TypeError: 'float' object is not iterable
+2025-05-16 01:35:35,223 - ERROR - Ошибка в analyze_longitudinal: 'float' object is not iterable
+Traceback (most recent call last):
+  File "c:\Users\uzika\python sourse\bore_bar_analysis\main.py", line 447, in analyze_longitudinal
+    mu = min(max(params.get('mu', 0.1), 0, 0.99))  # Коэф. трения (0 < \u03bc < 1)
+TypeError: 'float' object is not iterable
+2025-05-16 01:38:15,640 - ERROR - Ошибка в analyze_longitudinal: 'float' object is not iterable
+Traceback (most recent call last):
+  File "c:\Users\uzika\python sourse\bore_bar_analysis\main.py", line 447, in analyze_longitudinal
+    mu = min(max(float(params.get('mu', 0.1)), 0, 0.99))  # Коэф. трения 0 < \u03bc < 1
+TypeError: 'float' object is not iterable

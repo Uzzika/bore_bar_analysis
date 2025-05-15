@@ -435,112 +435,109 @@ class BoreBarGUI(QMainWindow):
         self.torsional_canvas.draw()
 
     def analyze_longitudinal(self, params):
-        """Анализ продольных колебаний с построением кривой D-разбиения"""
+        """Анализ продольных колебаний с построением D-разбиения"""
         self.longitudinal_figure.clear()
         ax = self.longitudinal_figure.add_subplot(111)
-
+        
         try:
-            # Параметры из GUI
-            E = params['E']
-            S = params['S']
-            rho = params['rho']
-            mu = params['mu']
-            tau = params['tau']
-            L = params['length']
+            # 1. Получение и проверка параметров
+            E = params.get('E', 200e9)       # Модуль Юнга (Па)
+            S = params.get('S', 2e-4)        # Площадь сечения (м²) - уточнено по исследованию
+            rho = params.get('rho', 7800)    # Плотность (кг/м³)
+            mu = max(0.01, min(params.get('mu', 0.1), 0.99))  # Коэф. трения 0 < μ < 1
+            tau = params.get('tau', 60e-3)   # Время запаздывания (с)
+            L = params.get('length', 4.0)    # Длина (м)
             
-            # Логирование параметров
-            logging.info(f"Запуск анализа с параметрами: E={E:.2e} Па, S={S:.2e} м², "
-                        f"rho={rho:.1f} кг/м³, mu={mu:.3f}, tau={tau:.3f} с, L={L:.2f} м")
+            # Проверка особого случая mu ≈ 1
+            if abs(1 - mu) < 1e-10:
+                raise ValueError("Коэффициент трения mu слишком близок к 1, решение не определено")
             
-            # Проверка физической корректности параметров
-            if any(p <= 0 for p in [E, S, rho, L]) or not (0 <= mu < 1):
-                raise ValueError("Некорректные параметры системы")
-            if tau < 0:
-                raise ValueError("Время запаздывания tau не может быть отрицательным")
+            # 2. Расчетные параметры
+            a = np.sqrt(E/rho)  # Скорость волны (м/с)
             
-            a = np.sqrt(E/rho)
-            omega = np.logspace(-3, np.log10(0.4), 2000)
+            # 3. Диапазон частот (рад/с) - как в MATLAB-коде исследования
+            omega = np.linspace(0.001, 0.4, 5000)  
             
+            # 4. Расчет D-кривой с защитой от особых точек
             with np.errstate(all='ignore'):
-                # Улучшенная обработка особых точек
-                tan_arg = omega * L / a
-                tan_arg = np.where(np.abs(np.abs(tan_arg) - np.pi/2) < 0.05, 
-                                np.pi/2 * 0.99 * np.sign(tan_arg), 
-                                tan_arg)
-                cot = np.cos(tan_arg)/np.sin(tan_arg)
+                x = omega * L / a
                 
-                K1 = (E*S/a**2) * omega * cot / (1 - mu*np.cos(omega*tau))
-                delta = -(E*S*mu/a**2) * cot * np.sin(omega*tau) / (1 - mu*np.cos(omega*tau))
+                # Безопасный расчет котангенса
+                cot = np.zeros_like(x)
+                sin_x = np.sin(x)
+                cos_x = np.cos(x)
+                cot_mask = np.abs(sin_x) > 1e-10
+                cot[cot_mask] = cos_x[cot_mask] / sin_x[cot_mask]
                 
-                # Расширенная фильтрация
-                valid = ~(np.isnan(K1) | np.isinf(K1) | np.isnan(delta) | np.isinf(delta))
-                valid = valid & (np.abs(K1) < 1e10) & (np.abs(delta) < 1e10)
-                K1 = K1[valid]
-                delta = delta[valid]
+                # Расчет знаменателя с защитой
+                denom = 1 - mu * np.cos(omega * tau)
+                denom_mask = np.abs(denom) > 1e-10
+                
+                # Основные формулы из исследования
+                K1 = (E*S/a) * omega * cot / denom
+                delta = -(E*S*mu/a) * cot * np.sin(omega*tau) / denom
+                
+                # Комбинированная маска валидных значений
+                valid = cot_mask & denom_mask & ~np.isnan(K1) & ~np.isnan(delta)
+                K1 = np.where(valid, K1, np.nan)
+                delta = np.where(valid, delta, np.nan)
             
-            # Безопасное вычисление особой точки
-            denominator = (-L + L*mu)
-            if abs(denominator) < 1e-10:
-                K1_0, delta_0 = float('nan'), float('nan')
+            # 5. Расчет особой точки (ω→0)
+            K1_0 = -E*S/(L*(1 - mu)) if abs(1 - mu) > 1e-10 else np.nan
+            delta_0 = tau*E*S*mu/(L*(1 - mu)) if abs(1 - mu) > 1e-10 else np.nan
+            
+            # 6. Построение графика
+            if np.any(valid):
+                # Основная кривая D-разбиения
+                line, = ax.plot(K1[valid]/1e6, delta[valid]/1e6, 'b-', 
+                            linewidth=1.5, label='Кривая D-разбиения')
+                
+                # Область устойчивости (δ > 0 и K₁ < 0)
+                stable_mask = (delta[valid] > 0) & (K1[valid] < 0)
+                if np.any(stable_mask):
+                    ax.fill_between(K1[valid][stable_mask]/1e6, 
+                                delta[valid][stable_mask]/1e6, 0,
+                                color='green', alpha=0.2, 
+                                label='Область устойчивости')
+                
+                # Особые точки
+                if not np.isnan(K1_0) and not np.isnan(delta_0):
+                    ax.plot(K1_0/1e6, delta_0/1e6, 'ro', markersize=8,
+                        label='Особая точка (ω→0)')
+                    ax.annotate(f'({K1_0/1e6:.1f}, {delta_0/1e6:.1f})',
+                            xy=(K1_0/1e6, delta_0/1e6), 
+                            xytext=(10, 10),
+                            textcoords='offset points',
+                            bbox=dict(boxstyle='round', 
+                                    fc='yellow', alpha=0.7))
             else:
-                K1_0 = -E*S/denominator
-                delta_0 = tau*E*S*mu/denominator
-            
-            # Построение графика
-            ax.plot(K1/1e6, delta/1e6, 'b-', linewidth=1.5, label='Кривая D-разбиения')
-            
-            # Добавление интерактивного курсора
-            from matplotlib.widgets import Cursor
-            cursor = Cursor(ax, horizOn=True, vertOn=True, color='red', linewidth=1)
-            
-            # Отображение особой точки с аннотацией
-            if not np.isnan(K1_0) and not np.isnan(delta_0):
-                ax.plot(K1_0/1e6, delta_0/1e6, 'ro', markersize=8, label='Особая точка (ω→0)')
-                ax.annotate(f'({K1_0/1e6:.2f}, {delta_0/1e6:.2f})', 
-                        xy=(K1_0/1e6, delta_0/1e6), xytext=(10, 10),
-                        textcoords='offset points', 
-                        bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
-                        fontsize=9)
-            
-            # Выделение области устойчивости
-            stable = (delta > 0) & (K1 < 0)
-            if np.any(stable):
-                ax.fill_between(K1[stable]/1e6, delta[stable]/1e6, color='green', 
-                            alpha=0.2, label='Устойчивая область')
-                logging.info(f"Найдена область устойчивости: {np.sum(stable)} точек")
-            else:
-                logging.warning("Область устойчивости не обнаружена")
-            
-            # Настройка оформления графика
-            ax.set_xlabel('K₁, МН/м', fontsize=10)
-            ax.set_ylabel('δ, МН·с/м', fontsize=10)
-            ax.set_title('Кривая D-разбиения для продольных колебаний', fontsize=12)
-            ax.grid(True, linestyle=':', alpha=0.7)
-            ax.legend(fontsize=9, loc='upper right')
-            
-            # Автомасштабирование с защитой от edge cases
-            if len(K1) > 0 and len(delta) > 0:
-                x_range = np.nanmax(K1/1e6) - np.nanmin(K1/1e6)
-                y_range = np.nanmax(delta/1e6) - np.nanmin(delta/1e6)
-                x_pad = max(0.1 * x_range, 1) if x_range > 0 else 1
-                y_pad = max(0.1 * y_range, 1) if y_range > 0 else 1
-                ax.set_xlim(np.nanmin(K1/1e6)-x_pad, np.nanmax(K1/1e6)+x_pad)
-                ax.set_ylim(np.nanmin(delta/1e6)-y_pad, np.nanmax(delta/1e6)+y_pad)
-            else:
-                ax.set_xlim(-1, 1)
-                ax.set_ylim(-1, 1)
-                ax.text(0.5, 0.5, "Нет данных для отображения", 
+                ax.text(0.5, 0.5, "Недостаточно данных для построения", 
                     ha='center', va='center', transform=ax.transAxes)
             
+            # 7. Настройка графика
+            ax.set_xlabel('Динамическая жесткость K₁, МН/м', fontsize=10)
+            ax.set_ylabel('Коэффициент демпфирования δ, МН·с/м', fontsize=10)
+            ax.set_title('D-разбиение для продольных колебаний', fontsize=12)
+            ax.grid(True, linestyle=':', alpha=0.5)
+            ax.legend(loc='best', fontsize=9)
+            
+            # Автомасштабирование с защитой
+            if np.any(valid):
+                x_min, x_max = np.nanmin(K1[valid]/1e6), np.nanmax(K1[valid]/1e6)
+                y_min, y_max = np.nanmin(delta[valid]/1e6), np.nanmax(delta[valid]/1e6)
+                
+                ax.set_xlim(x_min - 0.1*abs(x_min), x_max + 0.1*abs(x_max))
+                ax.set_ylim(y_min - 0.1*abs(y_min), y_max + 0.1*abs(y_max))
+
             self.longitudinal_figure.tight_layout()
             self.longitudinal_canvas.draw()
-            
+
         except Exception as e:
-            logging.error(f"Ошибка при анализе: {str(e)}", exc_info=True)
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при анализе: {str(e)}")
+            logging.error(f"Ошибка в analyze_longitudinal: {str(e)}", exc_info=True)
             ax.clear()
-            ax.text(0.5, 0.5, "Ошибка при построении графика", 
-                ha='center', va='center', transform=ax.transAxes)
+            ax.text(0.5, 0.5, f"Ошибка: {str(e)}", 
+                ha='center', va='center', transform=ax.transAxes,
+                bbox=dict(facecolor='red', alpha=0.2))
             self.longitudinal_canvas.draw()
 
     def analyze_comparative(self, params):
