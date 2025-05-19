@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from scipy.optimize import root_scalar
 import json
 import csv
+from matplotlib.backend_bases import MouseButton
+from matplotlib.widgets import SpanSelector
 
 import logging
 logging.basicConfig(filename='borebar_analysis.log', 
@@ -161,24 +163,31 @@ class BoreBarGUI(QMainWindow):
         self.tabs.addTab(self.comparative_tab, "Сравнительный анализ")
 
     def show_interactive(self):
-        """Интерактивная визуализация с отдельным окном"""
+        """Интерактивная визуализация с улучшенным масштабированием"""
         try:
-            # Создаем диалоговое окно для интерактивного режима
             dialog = QDialog(self)
-            dialog.setWindowTitle("Интерактивный режим")
+            dialog.setWindowTitle("Интерактивный режим с масштабированием")
             dialog.setModal(True)
-            dialog.resize(800, 600)
+            dialog.resize(1200, 900)
             
             layout = QVBoxLayout(dialog)
             
-            # Создаем вкладки для разных типов интерактивного анализа
             tabs = QTabWidget()
             
             # 1. Вкладка крутильных колебаний
             torsional_tab = QWidget()
             torsional_layout = QVBoxLayout(torsional_tab)
             
-            # Добавляем слайдеры для параметров
+            # Создаем фигуру и canvas для крутильных колебаний
+            torsional_fig = Figure(figsize=(10, 6))
+            torsional_canvas = FigureCanvas(torsional_fig)
+            
+            # Создаем сетку графиков 1x2 как в analyze_torsional
+            gs = torsional_fig.add_gridspec(1, 2)
+            torsional_ax1 = torsional_fig.add_subplot(gs[0, 0])  # Кривая D-разбиения
+            torsional_ax2 = torsional_fig.add_subplot(gs[0, 1])  # Диаграмма устойчивости
+            
+            # Добавляем слайдеры
             length_slider = QSlider(Qt.Horizontal)
             length_slider.setRange(2, 6)
             length_slider.setValue(3)
@@ -190,6 +199,180 @@ class BoreBarGUI(QMainWindow):
             delta_slider.setRange(1, 100)
             delta_slider.setValue(34)
             
+            # Инициализация графиков
+            omega = np.linspace(1000, 15000, 1000)
+            line1, = torsional_ax1.plot([], [], 'b-', linewidth=1.5)
+            torsional_ax1.grid(True)
+            torsional_ax1.set_title('Кривая D-разбиения (Колесо мыши - масштаб, ЛКМ - панорамирование)')
+            torsional_ax1.set_xlabel('Re(σ)')
+            torsional_ax1.set_ylabel('Im(σ)')
+            
+            # Инициализация диаграммы устойчивости
+            colors = plt.cm.viridis(np.linspace(0, 1, 5))
+            lines2 = []
+            for i in range(5):
+                line, = torsional_ax2.plot([], [], 'o-', color=colors[i], markersize=4, linewidth=1.5)
+                lines2.append(line)
+            
+            torsional_ax2.grid(True)
+            torsional_ax2.set_title('Диаграмма устойчивости')
+            torsional_ax2.set_xlabel('Коэффициент внутреннего трения δ₁ (с)')
+            torsional_ax2.set_ylabel('Re(σ)')
+            
+            # Сохраняем исходные пределы
+            torsional_original_xlim1 = (-15000, 500)
+            torsional_original_ylim1 = (-8000, 8000)
+            torsional_ax1.set_xlim(torsional_original_xlim1)
+            torsional_ax1.set_ylim(torsional_original_ylim1)
+            
+            torsional_original_xlim2 = (3.44e-6, 3.44e-5)
+            torsional_original_ylim2 = (-1500, 100)
+            torsional_ax2.set_xlim(torsional_original_xlim2)
+            torsional_ax2.set_ylim(torsional_original_ylim2)
+            torsional_ax2.set_xscale('log')
+            
+            # Для хранения текущих пределов
+            torsional_current_xlim1 = list(torsional_original_xlim1)
+            torsional_current_ylim1 = list(torsional_original_ylim1)
+            torsional_press1 = None
+            
+            def on_scroll_torsional(event):
+                """Масштабирование колесом мыши"""
+                if event.inaxes not in [torsional_ax1, torsional_ax2]:
+                    return
+                    
+                scale_factor = 1.2 if event.button == 'up' else 1/1.2
+                
+                if event.inaxes == torsional_ax1:
+                    # Масштабирование относительно положения курсора для ax1
+                    xdata = event.xdata
+                    ydata = event.ydata
+                    
+                    x_left = xdata - (xdata - torsional_current_xlim1[0]) * scale_factor
+                    x_right = xdata + (torsional_current_xlim1[1] - xdata) * scale_factor
+                    y_bottom = ydata - (ydata - torsional_current_ylim1[0]) * scale_factor
+                    y_top = ydata + (torsional_current_ylim1[1] - ydata) * scale_factor
+                    
+                    torsional_current_xlim1[:] = [x_left, x_right]
+                    torsional_current_ylim1[:] = [y_bottom, y_top]
+                    
+                    torsional_ax1.set_xlim(torsional_current_xlim1)
+                    torsional_ax1.set_ylim(torsional_current_ylim1)
+                
+                torsional_canvas.draw()
+            
+            def on_press_torsional(event):
+                """Начало панорамирования"""
+                nonlocal torsional_press1
+                if event.inaxes != torsional_ax1 or event.button != MouseButton.LEFT:
+                    return
+                torsional_press1 = event.xdata, event.ydata
+            
+            def on_release_torsional(event):
+                """Конец панорамирования"""
+                nonlocal torsional_press1
+                torsional_press1 = None
+                torsional_canvas.draw()
+            
+            def on_motion_torsional(event):
+                """Панорамирование"""
+                nonlocal torsional_press1, torsional_current_xlim1, torsional_current_ylim1
+                if torsional_press1 is None or event.inaxes != torsional_ax1:
+                    return
+                
+                xpress, ypress = torsional_press1
+                dx = event.xdata - xpress
+                dy = event.ydata - ypress
+                
+                torsional_current_xlim1[0] -= dx
+                torsional_current_xlim1[1] -= dx
+                torsional_current_ylim1[0] -= dy
+                torsional_current_ylim1[1] -= dy
+                
+                torsional_ax1.set_xlim(torsional_current_xlim1)
+                torsional_ax1.set_ylim(torsional_current_ylim1)
+                torsional_press1 = event.xdata, event.ydata
+                torsional_canvas.draw()
+            
+            def reset_torsional_zoom():
+                """Сброс масштаба к исходному"""
+                torsional_current_xlim1[:] = list(torsional_original_xlim1)
+                torsional_current_ylim1[:] = list(torsional_original_ylim1)
+                torsional_ax1.set_xlim(torsional_current_xlim1)
+                torsional_ax1.set_ylim(torsional_current_ylim1)
+                torsional_canvas.draw()
+            
+            def update_torsional():
+                l = length_slider.value() / 2  # Преобразуем 1-100 в 0.5-5.0
+                delta = delta_slider.value() * 1e-6  # Преобразуем 1-100 в 1e-6-1e-4
+                
+                params = self.get_current_parameters()
+                rho = params['rho']
+                G = params['G']
+                Jr = params['Jr']
+                Jp = params['Jp']
+                
+                lambda1 = np.sqrt(rho * G) * Jp / Jr
+                lambda2 = l * np.sqrt(rho / G)
+                
+                # 1. Кривая D-разбиения
+                p = 1j * omega
+                with np.errstate(all='ignore'):
+                    expr = np.sqrt(1 + delta * p)
+                    sigma = -p - lambda1 * expr * (1 / np.tanh(lambda2 * p / expr))
+                    sigma = np.nan_to_num(sigma, nan=0.0, posinf=1e10, neginf=-1e10)
+                
+                line1.set_data(sigma.real, sigma.imag)
+                
+                # 2. Диаграмма устойчивости
+                lengths = np.array([2.5, 3, 4, 5, 6])
+                multipliers = np.array([1, 2, 3, 4, 6, 10])
+                delta1_values = params['delta1'] * multipliers
+                lambda2_values = lengths * np.sqrt(rho / G)
+                
+                for i, l in enumerate(lengths):
+                    Sigma = np.zeros(len(delta1_values))
+                    
+                    for j, delta_val in enumerate(delta1_values):
+                        def im_sigma(omega_val):
+                            p_val = 1j * omega_val
+                            with np.errstate(all='ignore'):
+                                sqrt_expr = np.sqrt(1 + delta_val * p_val)
+                                cth = 1 / np.tanh(lambda2_values[i] * p_val / sqrt_expr)
+                                val = -p_val - lambda1 * sqrt_expr * cth
+                                return val.imag
+                        
+                        try:
+                            if i == 4:  # Для длины 6 м
+                                omega_sol = root_scalar(im_sigma, bracket=[500, 1000], method='brentq').root
+                            else:
+                                omega_sol = root_scalar(im_sigma, bracket=[500, 2000], method='brentq').root
+                            
+                            p_sol = 1j * omega_sol
+                            with np.errstate(all='ignore'):
+                                sqrt_expr = np.sqrt(1 + delta_val * p_sol)
+                                cth = 1 / np.tanh(lambda2_values[i] * p_sol / sqrt_expr)
+                                Sigma[j] = (-p_sol - lambda1 * sqrt_expr * cth).real
+                        except:
+                            Sigma[j] = np.nan
+                    
+                    valid = ~np.isnan(Sigma)
+                    lines2[i].set_data(delta1_values[valid], Sigma[valid])
+                    lines2[i].set_label(f'L={l} м')
+                
+                torsional_ax2.legend()
+                torsional_canvas.draw()
+            
+            # Подключаем обработчики событий
+            torsional_canvas.mpl_connect('scroll_event', on_scroll_torsional)
+            torsional_canvas.mpl_connect('button_press_event', on_press_torsional)
+            torsional_canvas.mpl_connect('button_release_event', on_release_torsional)
+            torsional_canvas.mpl_connect('motion_notify_event', on_motion_torsional)
+            
+            length_slider.valueChanged.connect(update_torsional)
+            delta_slider.valueChanged.connect(update_torsional)
+            
+            torsional_layout.addWidget(torsional_canvas)
             torsional_layout.addWidget(QLabel("Длина борштанги (м):"))
             torsional_layout.addWidget(length_slider)
             torsional_layout.addWidget(QLabel("Коэффициент трения δ₁ (x1e-6):"))
@@ -199,7 +382,12 @@ class BoreBarGUI(QMainWindow):
             longitudinal_tab = QWidget()
             longitudinal_layout = QVBoxLayout(longitudinal_tab)
             
-            # Добавляем слайдеры для параметров
+            # Создаем фигуру и canvas для продольных колебаний
+            longitudinal_fig = Figure(figsize=(10, 6))
+            longitudinal_canvas = FigureCanvas(longitudinal_fig)
+            longitudinal_ax = longitudinal_fig.add_subplot(111)
+            
+            # Добавляем слайдеры
             mu_slider = QSlider(Qt.Horizontal)
             mu_slider.setRange(1, 50)
             mu_slider.setValue(10)
@@ -208,28 +396,174 @@ class BoreBarGUI(QMainWindow):
             tau_slider.setRange(10, 200)
             tau_slider.setValue(60)
             
+            # Инициализация графика
+            line_long, = longitudinal_ax.plot([], [], 'b-', linewidth=1.5)
+            longitudinal_ax.grid(True)
+            longitudinal_ax.set_title('Продольные колебания (Колесо мыши - масштаб, ЛКМ - панорамирование)')
+            longitudinal_ax.set_xlabel('K₁, МН/м')
+            longitudinal_ax.set_ylabel('δ, кН·с/м')
+            
+            # Сохраняем исходные пределы
+            longitudinal_original_xlim = (0, 20)
+            longitudinal_original_ylim = (-150, 50)
+            longitudinal_ax.set_xlim(longitudinal_original_xlim)
+            longitudinal_ax.set_ylim(longitudinal_original_ylim)
+            
+            # Для хранения текущих пределов
+            longitudinal_current_xlim = list(longitudinal_original_xlim)
+            longitudinal_current_ylim = list(longitudinal_original_ylim)
+            longitudinal_press = None
+            
+            def on_scroll_longitudinal(event):
+                """Масштабирование колесом мыши"""
+                if event.inaxes != longitudinal_ax:
+                    return
+                    
+                scale_factor = 1.2 if event.button == 'up' else 1/1.2
+                
+                # Масштабирование относительно положения курсора
+                xdata = event.xdata
+                ydata = event.ydata
+                
+                x_left = xdata - (xdata - longitudinal_current_xlim[0]) * scale_factor
+                x_right = xdata + (longitudinal_current_xlim[1] - xdata) * scale_factor
+                y_bottom = ydata - (ydata - longitudinal_current_ylim[0]) * scale_factor
+                y_top = ydata + (longitudinal_current_ylim[1] - ydata) * scale_factor
+                
+                longitudinal_current_xlim[:] = [x_left, x_right]
+                longitudinal_current_ylim[:] = [y_bottom, y_top]
+                
+                longitudinal_ax.set_xlim(longitudinal_current_xlim)
+                longitudinal_ax.set_ylim(longitudinal_current_ylim)
+                longitudinal_canvas.draw()
+            
+            def on_press_longitudinal(event):
+                """Начало панорамирования"""
+                nonlocal longitudinal_press
+                if event.inaxes != longitudinal_ax or event.button != MouseButton.LEFT:
+                    return
+                longitudinal_press = event.xdata, event.ydata
+            
+            def on_release_longitudinal(event):
+                """Конец панорамирования"""
+                nonlocal longitudinal_press
+                longitudinal_press = None
+                longitudinal_canvas.draw()
+            
+            def on_motion_longitudinal(event):
+                """Панорамирование"""
+                nonlocal longitudinal_press, longitudinal_current_xlim, longitudinal_current_ylim
+                if longitudinal_press is None or event.inaxes != longitudinal_ax:
+                    return
+                
+                xpress, ypress = longitudinal_press
+                dx = event.xdata - xpress
+                dy = event.ydata - ypress
+                
+                longitudinal_current_xlim[0] -= dx
+                longitudinal_current_xlim[1] -= dx
+                longitudinal_current_ylim[0] -= dy
+                longitudinal_current_ylim[1] -= dy
+                
+                longitudinal_ax.set_xlim(longitudinal_current_xlim)
+                longitudinal_ax.set_ylim(longitudinal_current_ylim)
+                longitudinal_press = event.xdata, event.ydata
+                longitudinal_canvas.draw()
+            
+            def reset_longitudinal_zoom():
+                """Сброс масштаба к исходному"""
+                longitudinal_current_xlim[:] = list(longitudinal_original_xlim)
+                longitudinal_current_ylim[:] = list(longitudinal_original_ylim)
+                longitudinal_ax.set_xlim(longitudinal_current_xlim)
+                longitudinal_ax.set_ylim(longitudinal_current_ylim)
+                longitudinal_canvas.draw()
+            
+            def update_longitudinal():
+                mu = mu_slider.value() / 100  # Преобразуем 1-50 в 0.01-0.5
+                tau = tau_slider.value() * 1e-3  # Преобразуем 10-200 в 0.01-0.2
+                
+                params = self.get_current_parameters()
+                E = params['E']
+                S = params['S']
+                rho = params['rho']
+                L = params['length']
+                
+                a = np.sqrt(E/rho)
+                omega = np.linspace(0.01, 2*np.pi*100, 5000)
+                
+                with np.errstate(all='ignore'):
+                    x = omega * L / a
+                    mask = (np.abs(np.sin(x)) > 1e-6)
+                    cot = np.zeros_like(x)
+                    cot[mask] = 1/np.tan(x[mask])
+                    
+                    denom = 1 - mu * np.cos(omega * tau)
+                    denom_mask = np.abs(denom) > 1e-6
+                    
+                    valid = mask & denom_mask
+                    
+                    K1 = np.full_like(omega, np.nan)
+                    delta = np.full_like(omega, np.nan)
+                    
+                    K1[valid] = (E*S/a) * omega[valid] * cot[valid] / denom[valid]
+                    delta[valid] = -(E*S*mu/a) * cot[valid] * np.sin(omega[valid]*tau) / denom[valid]
+                    
+                    valid = valid & (K1 > 0) & (K1 < 1e10) & (np.abs(delta) < 1e6)
+                    K1 = K1[valid]
+                    delta = delta[valid]
+                
+                line_long.set_data(K1/1e6, delta/1e3)
+                longitudinal_canvas.draw()
+            
+            # Подключаем обработчики событий
+            longitudinal_canvas.mpl_connect('scroll_event', on_scroll_longitudinal)
+            longitudinal_canvas.mpl_connect('button_press_event', on_press_longitudinal)
+            longitudinal_canvas.mpl_connect('button_release_event', on_release_longitudinal)
+            longitudinal_canvas.mpl_connect('motion_notify_event', on_motion_longitudinal)
+            
+            mu_slider.valueChanged.connect(update_longitudinal)
+            tau_slider.valueChanged.connect(update_longitudinal)
+            
+            longitudinal_layout.addWidget(longitudinal_canvas)
             longitudinal_layout.addWidget(QLabel("Коэффициент трения μ (x0.01):"))
             longitudinal_layout.addWidget(mu_slider)
             longitudinal_layout.addWidget(QLabel("Время запаздывания τ (мс):"))
             longitudinal_layout.addWidget(tau_slider)
+            
+            # Добавляем кнопки управления масштабированием
+            control_buttons = QHBoxLayout()
+            
+            reset_zoom_torsional_btn = QPushButton("Сбросить масштаб (Крутильные)")
+            reset_zoom_torsional_btn.clicked.connect(reset_torsional_zoom)
+            
+            reset_zoom_longitudinal_btn = QPushButton("Сбросить масштаб (Продольные)")
+            reset_zoom_longitudinal_btn.clicked.connect(reset_longitudinal_zoom)
+            
+            control_buttons.addWidget(reset_zoom_torsional_btn)
+            control_buttons.addWidget(reset_zoom_longitudinal_btn)
             
             # Добавляем вкладки
             tabs.addTab(torsional_tab, "Крутильные колебания")
             tabs.addTab(longitudinal_tab, "Продольные колебания")
             
             layout.addWidget(tabs)
+            layout.addLayout(control_buttons)
             
             # Кнопка закрытия
             close_btn = QPushButton("Закрыть")
             close_btn.clicked.connect(dialog.close)
             layout.addWidget(close_btn)
             
-            # Показываем диалоговое окно
+            # Первоначальное обновление графиков
+            update_torsional()
+            update_longitudinal()
+            
             dialog.exec_()
             
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось запустить интерактивный режим: {str(e)}")
-            
+
+                        
     def setup_control_buttons(self):
         """Настройка кнопок управления"""
         buttons_layout = QHBoxLayout()
@@ -545,7 +879,6 @@ class BoreBarGUI(QMainWindow):
         print(f"Основная частота для L={L}m: {a/(2*L):.2f} рад/с")
         print(f"Диапазон K1: {np.min(K1)/1e6:.2f} - {np.max(K1)/1e6:.2f} МН/м")
         print(f"Диапазон δ: {np.min(delta)/1e3:.2f} - {np.max(delta)/1e3:.2f} кН·с/м")
-
 
         # Проверка крайних значений
         print(f"\nКрайние точки D-разбиения:")
