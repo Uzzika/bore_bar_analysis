@@ -182,10 +182,8 @@ class BoreBarGUI(QMainWindow):
             torsional_fig = Figure(figsize=(10, 6))
             torsional_canvas = FigureCanvas(torsional_fig)
             
-            # Создаем сетку графиков 1x2 как в analyze_torsional
-            gs = torsional_fig.add_gridspec(1, 2)
-            torsional_ax1 = torsional_fig.add_subplot(gs[0, 0])  # Кривая D-разбиения
-            torsional_ax2 = torsional_fig.add_subplot(gs[0, 1])  # Диаграмма устойчивости
+            # Теперь используем только один график (кривая D-разбиения)
+            torsional_ax = torsional_fig.add_subplot(111)
             
             # Добавляем слайдеры
             length_slider = QSlider(Qt.Horizontal)
@@ -199,170 +197,168 @@ class BoreBarGUI(QMainWindow):
             delta_slider.setRange(1, 100)
             delta_slider.setValue(34)
             
-            # Инициализация графиков
-            omega = np.linspace(1000, 15000, 1000)
-            line1, = torsional_ax1.plot([], [], 'b-', linewidth=1.5)
-            torsional_ax1.grid(True)
-            torsional_ax1.set_title('Кривая D-разбиения (Колесо мыши - масштаб, ЛКМ - панорамирование)')
-            torsional_ax1.set_xlabel('Re(σ)')
-            torsional_ax1.set_ylabel('Im(σ)')
-            
-            # Инициализация диаграммы устойчивости
-            colors = plt.cm.viridis(np.linspace(0, 1, 5))
-            lines2 = []
-            for i in range(5):
-                line, = torsional_ax2.plot([], [], 'o-', color=colors[i], markersize=4, linewidth=1.5)
-                lines2.append(line)
-            
-            torsional_ax2.grid(True)
-            torsional_ax2.set_title('Диаграмма устойчивости')
-            torsional_ax2.set_xlabel('Коэффициент внутреннего трения δ₁ (с)')
-            torsional_ax2.set_ylabel('Re(σ)')
-            
-            # Сохраняем исходные пределы
-            torsional_original_xlim1 = (-15000, 500)
-            torsional_original_ylim1 = (-8000, 8000)
-            torsional_ax1.set_xlim(torsional_original_xlim1)
-            torsional_ax1.set_ylim(torsional_original_ylim1)
-            
-            torsional_original_xlim2 = (3.44e-6, 3.44e-5)
-            torsional_original_ylim2 = (-1500, 100)
-            torsional_ax2.set_xlim(torsional_original_xlim2)
-            torsional_ax2.set_ylim(torsional_original_ylim2)
-            torsional_ax2.set_xscale('log')
+            # Инициализация графика
+            line, = torsional_ax.plot([], [], 'b-', linewidth=1.5)
+            torsional_ax.grid(True, which='both', linestyle=':', alpha=0.7)
+            torsional_ax.set_title('Кривая D-разбиения для крутильных колебаний')
+            torsional_ax.set_xlabel('Re(σ)')
+            torsional_ax.set_ylabel('Im(σ)')
+            torsional_ax.axhline(0, color='red', linestyle='--', linewidth=0.7)
+            torsional_ax.axvline(0, color='red', linestyle='--', linewidth=0.7)
             
             # Для хранения текущих пределов
-            torsional_current_xlim1 = list(torsional_original_xlim1)
-            torsional_current_ylim1 = list(torsional_original_ylim1)
-            torsional_press1 = None
+            torsional_current_xlim = None
+            torsional_current_ylim = None
+            torsional_press = None
             
             def on_scroll_torsional(event):
                 """Масштабирование колесом мыши"""
-                if event.inaxes not in [torsional_ax1, torsional_ax2]:
+                if event.inaxes != torsional_ax:
                     return
                     
                 scale_factor = 1.2 if event.button == 'up' else 1/1.2
                 
-                if event.inaxes == torsional_ax1:
-                    # Масштабирование относительно положения курсора для ax1
-                    xdata = event.xdata
-                    ydata = event.ydata
-                    
-                    x_left = xdata - (xdata - torsional_current_xlim1[0]) * scale_factor
-                    x_right = xdata + (torsional_current_xlim1[1] - xdata) * scale_factor
-                    y_bottom = ydata - (ydata - torsional_current_ylim1[0]) * scale_factor
-                    y_top = ydata + (torsional_current_ylim1[1] - ydata) * scale_factor
-                    
-                    torsional_current_xlim1[:] = [x_left, x_right]
-                    torsional_current_ylim1[:] = [y_bottom, y_top]
-                    
-                    torsional_ax1.set_xlim(torsional_current_xlim1)
-                    torsional_ax1.set_ylim(torsional_current_ylim1)
+                # Масштабирование относительно положения курсора
+                xdata = event.xdata
+                ydata = event.ydata
                 
+                x_left = xdata - (xdata - torsional_current_xlim[0]) * scale_factor
+                x_right = xdata + (torsional_current_xlim[1] - xdata) * scale_factor
+                y_bottom = ydata - (ydata - torsional_current_ylim[0]) * scale_factor
+                y_top = ydata + (torsional_current_ylim[1] - ydata) * scale_factor
+                
+                torsional_current_xlim[:] = [x_left, x_right]
+                torsional_current_ylim[:] = [y_bottom, y_top]
+                
+                torsional_ax.set_xlim(torsional_current_xlim)
+                torsional_ax.set_ylim(torsional_current_ylim)
                 torsional_canvas.draw()
             
             def on_press_torsional(event):
                 """Начало панорамирования"""
-                nonlocal torsional_press1
-                if event.inaxes != torsional_ax1 or event.button != MouseButton.LEFT:
+                nonlocal torsional_press
+                if event.inaxes != torsional_ax or event.button != MouseButton.LEFT:
                     return
-                torsional_press1 = event.xdata, event.ydata
+                torsional_press = event.xdata, event.ydata
             
             def on_release_torsional(event):
                 """Конец панорамирования"""
-                nonlocal torsional_press1
-                torsional_press1 = None
+                nonlocal torsional_press
+                torsional_press = None
                 torsional_canvas.draw()
             
             def on_motion_torsional(event):
                 """Панорамирование"""
-                nonlocal torsional_press1, torsional_current_xlim1, torsional_current_ylim1
-                if torsional_press1 is None or event.inaxes != torsional_ax1:
+                nonlocal torsional_press, torsional_current_xlim, torsional_current_ylim
+                if torsional_press is None or event.inaxes != torsional_ax:
                     return
                 
-                xpress, ypress = torsional_press1
+                xpress, ypress = torsional_press
                 dx = event.xdata - xpress
                 dy = event.ydata - ypress
                 
-                torsional_current_xlim1[0] -= dx
-                torsional_current_xlim1[1] -= dx
-                torsional_current_ylim1[0] -= dy
-                torsional_current_ylim1[1] -= dy
+                torsional_current_xlim[0] -= dx
+                torsional_current_xlim[1] -= dx
+                torsional_current_ylim[0] -= dy
+                torsional_current_ylim[1] -= dy
                 
-                torsional_ax1.set_xlim(torsional_current_xlim1)
-                torsional_ax1.set_ylim(torsional_current_ylim1)
-                torsional_press1 = event.xdata, event.ydata
+                torsional_ax.set_xlim(torsional_current_xlim)
+                torsional_ax.set_ylim(torsional_current_ylim)
+                torsional_press = event.xdata, event.ydata
                 torsional_canvas.draw()
             
             def reset_torsional_zoom():
                 """Сброс масштаба к исходному"""
-                torsional_current_xlim1[:] = list(torsional_original_xlim1)
-                torsional_current_ylim1[:] = list(torsional_original_ylim1)
-                torsional_ax1.set_xlim(torsional_current_xlim1)
-                torsional_ax1.set_ylim(torsional_current_ylim1)
-                torsional_canvas.draw()
+                if hasattr(self, 'torsional_original_xlim'):
+                    torsional_current_xlim[:] = list(self.torsional_original_xlim)
+                    torsional_current_ylim[:] = list(self.torsional_original_ylim)
+                    torsional_ax.set_xlim(torsional_current_xlim)
+                    torsional_ax.set_ylim(torsional_current_ylim)
+                    torsional_canvas.draw()
             
             def update_torsional():
-                l = length_slider.value() / 2  # Преобразуем 1-100 в 0.5-5.0
-                delta = delta_slider.value() * 1e-6  # Преобразуем 1-100 в 1e-6-1e-4
-                
-                params = self.get_current_parameters()
-                rho = params['rho']
-                G = params['G']
-                Jr = params['Jr']
-                Jp = params['Jp']
-                
-                lambda1 = np.sqrt(rho * G) * Jp / Jr
-                lambda2 = l * np.sqrt(rho / G)
-                
-                # 1. Кривая D-разбиения
-                p = 1j * omega
-                with np.errstate(all='ignore'):
-                    expr = np.sqrt(1 + delta * p)
-                    sigma = -p - lambda1 * expr * (1 / np.tanh(lambda2 * p / expr))
-                    sigma = np.nan_to_num(sigma, nan=0.0, posinf=1e10, neginf=-1e10)
-                
-                line1.set_data(sigma.real, sigma.imag)
-                
-                # 2. Диаграмма устойчивости
-                lengths = np.array([2.5, 3, 4, 5, 6])
-                multipliers = np.array([1, 2, 3, 4, 6, 10])
-                delta1_values = params['delta1'] * multipliers
-                lambda2_values = lengths * np.sqrt(rho / G)
-                
-                for i, l in enumerate(lengths):
-                    Sigma = np.zeros(len(delta1_values))
+                try:
+                    # Получаем значения из слайдеров с правильным масштабированием
+                    l = length_slider.value()  # 2-6 метров
+                    delta = delta_slider.value() * 1e-6  # 1e-6 до 1e-4
                     
-                    for j, delta_val in enumerate(delta1_values):
-                        def im_sigma(omega_val):
-                            p_val = 1j * omega_val
-                            with np.errstate(all='ignore'):
-                                sqrt_expr = np.sqrt(1 + delta_val * p_val)
-                                cth = 1 / np.tanh(lambda2_values[i] * p_val / sqrt_expr)
-                                val = -p_val - lambda1 * sqrt_expr * cth
-                                return val.imag
+                    params = self.get_current_parameters()
+                    rho = params['rho']
+                    G = params['G']
+                    Jr = params['Jr']
+                    Jp = params['Jp']
+                    
+                    lambda1 = np.sqrt(rho * G) * Jp / Jr
+                    lambda2 = l * np.sqrt(rho / G)
+                    
+                    # Вывод параметров в консоль для отладки
+                    print(f"\n=== Крутильные колебания (L={l} м, δ₁={delta:.2e} с) ===")
+                    print(f"λ₁ = {lambda1:.2e}, λ₂ = {lambda2:.2e}")
+                    
+                    # Генерируем диапазон частот
+                    omega = np.linspace(1000, 15000, 1000)
+                    p = 1j * omega
+                    
+                    with np.errstate(all='ignore'):
+                        # Вычисление как в консольной версии
+                        expr = np.sqrt(1 + delta * p)
+                        cth = 1 / np.tanh(lambda2 * p / expr)
+                        sigma = -p - lambda1 * expr * cth
+                        sigma = np.nan_to_num(sigma, nan=0.0, posinf=1e10, neginf=-1e10)
+                    
+                    # Фильтрация аномальных значений
+                    valid = (np.abs(sigma.real) < 1e8) & (np.abs(sigma.imag) < 1e8)
+                    sigma = sigma[valid]
+                    
+                    # Обновление графика с фиксированными пределами как в консоли
+                    line.set_data(sigma.real, sigma.imag)
+                    torsional_ax.set_xlim(-15000, 500)
+                    torsional_ax.set_ylim(-8000, 8000)
+                    torsional_canvas.draw_idle()
+                    
+                    # Автоматическая настройка масштаба
+                    if len(sigma) > 0:
+                        x_pad = 0.1 * (np.nanmax(sigma.real) - np.nanmin(sigma.real))
+                        y_pad = 0.1 * (np.nanmax(sigma.imag) - np.nanmin(sigma.imag))
                         
-                        try:
-                            if i == 4:  # Для длины 6 м
-                                omega_sol = root_scalar(im_sigma, bracket=[500, 1000], method='brentq').root
-                            else:
-                                omega_sol = root_scalar(im_sigma, bracket=[500, 2000], method='brentq').root
-                            
-                            p_sol = 1j * omega_sol
-                            with np.errstate(all='ignore'):
-                                sqrt_expr = np.sqrt(1 + delta_val * p_sol)
-                                cth = 1 / np.tanh(lambda2_values[i] * p_sol / sqrt_expr)
-                                Sigma[j] = (-p_sol - lambda1 * sqrt_expr * cth).real
-                        except:
-                            Sigma[j] = np.nan
+                        x_min = np.nanmin(sigma.real) - x_pad
+                        x_max = np.nanmax(sigma.real) + x_pad
+                        y_min = np.nanmin(sigma.imag) - y_pad
+                        y_max = np.nanmax(sigma.imag) + y_pad
+                        
+                        torsional_ax.set_xlim(x_min, x_max)
+                        torsional_ax.set_ylim(y_min, y_max)
+                        
+                        # Сохраняем текущие пределы для масштабирования
+                        torsional_current_xlim = [x_min, x_max]
+                        torsional_current_ylim = [y_min, y_max]
                     
-                    valid = ~np.isnan(Sigma)
-                    lines2[i].set_data(delta1_values[valid], Sigma[valid])
-                    lines2[i].set_label(f'L={l} м')
-                
-                torsional_ax2.legend()
-                torsional_canvas.draw()
-            
+                    # Обновляем заголовок с текущими параметрами
+                    torsional_ax.set_title(
+                        f'Крутильные колебания: L={l} м, δ₁={delta:.1e} с\n'
+                        f'Re(σ)∈[{np.nanmin(sigma.real):.1f}, {np.nanmax(sigma.real):.1f}], '
+                        f'Im(σ)∈[{np.nanmin(sigma.imag):.1f}, {np.nanmax(sigma.imag):.1f}]',
+                        fontsize=10
+                    )
+                    
+                    torsional_canvas.draw_idle()
+                    
+                    # Вывод контрольных точек
+                    if len(sigma) > 10:
+                        print(f"Первая точка: Re(σ)={sigma.real[0]:.1f}, Im(σ)={sigma.imag[0]:.1f}")
+                        print(f"Средняя точка: Re(σ)={sigma.real[len(sigma)//2]:.1f}, Im(σ)={sigma.imag[len(sigma)//2]:.1f}")
+                        print(f"Последняя точка: Re(σ)={sigma.real[-1]:.1f}, Im(σ)={sigma.imag[-1]:.1f}")
+                    else:
+                        print("Недостаточно точек для построения графика!")
+                        
+                except Exception as e:
+                    print(f"Ошибка при обновлении графика: {str(e)}")
+                    # В случае ошибки показываем сообщение на графике
+                    torsional_ax.clear()
+                    torsional_ax.text(0.5, 0.5, 'Ошибка при построении графика', 
+                                    ha='center', va='center')
+                    torsional_canvas.draw_idle()
+                    
             # Подключаем обработчики событий
             torsional_canvas.mpl_connect('scroll_event', on_scroll_torsional)
             torsional_canvas.mpl_connect('button_press_event', on_press_torsional)
@@ -377,7 +373,7 @@ class BoreBarGUI(QMainWindow):
             torsional_layout.addWidget(length_slider)
             torsional_layout.addWidget(QLabel("Коэффициент трения δ₁ (x1e-6):"))
             torsional_layout.addWidget(delta_slider)
-            
+                
             # 2. Вкладка продольных колебаний
             longitudinal_tab = QWidget()
             longitudinal_layout = QVBoxLayout(longitudinal_tab)
@@ -489,6 +485,18 @@ class BoreBarGUI(QMainWindow):
                 L = params['length']
                 
                 a = np.sqrt(E/rho)
+                omega_main = np.pi*a/L
+                
+                print("\n=== Параметры системы ===")
+                print(f"E = {E:.2e} Па, S = {S:.2e} м², ρ = {rho:.1f} кг/м³")
+                print(f"L = {L} м, μ = {mu}, τ = {tau:.3f} с")
+                
+                print(f"\n1. Скорость волны:")
+                print(f"a = sqrt(E/ρ) = sqrt({E:.2e}/{rho:.1f}) = {a:.2f} м/с")
+                
+                print(f"\n2. Основная частота:")
+                print(f"ω_main = π*a/L = π*{a:.2f}/{L} = {omega_main:.2f} рад/с ({omega_main/(2*np.pi):.2f} Гц)")
+                
                 omega = np.linspace(0.01, 2*np.pi*100, 5000)
                 
                 with np.errstate(all='ignore'):
@@ -511,6 +519,24 @@ class BoreBarGUI(QMainWindow):
                     valid = valid & (K1 > 0) & (K1 < 1e10) & (np.abs(delta) < 1e6)
                     K1 = K1[valid]
                     delta = delta[valid]
+                    omega_valid = omega[valid]
+                    
+                    print(f"\n3. Диапазон x = ω*L/a: от {x.min():.2f} до {x.max():.2f}")
+                    print(f"Условия при sin(x)≈0: {np.sum(~mask)} точек из {len(x)}")
+                    print(f"Условия при denom≈0: {np.sum(~denom_mask)} точек из {len(x)}")
+                    print(f"\n4. Результаты после фильтрации:")
+                    print(f"Осталось {len(K1)} точек из {len(x)}")
+                    
+                    if len(K1) > 0:
+                        print("\n5. Крайние точки D-разбиения:")
+                        print(f"Первая точка: ω={omega_valid[0]:.2f}, K1={K1[0]/1e6:.2f} МН/м, δ={delta[0]/1e3:.2f} кН·с/м")
+                        print(f"Последняя точка: ω={omega_valid[-1]:.2f}, K1={K1[-1]/1e6:.2f} МН/м, δ={delta[-1]/1e3:.2f} кН·с/м")
+                        
+                        K1_0 = (E*S)/(L*(1 - mu))
+                        delta_0 = - (E*S*mu*tau)/(L*(1 - mu))
+                        print("\n6. Проверка асимптотики при ω→0:")
+                        print(f"K1(ω→0) = {K1_0/1e6:.2f} МН/м (ожидается ~17-18 МН/м)")
+                        print(f"δ(ω→0) = {delta_0/1e3:.2f} кН·с/м (ожидается ~-100 кН·с/м)")
                 
                 line_long.set_data(K1/1e6, delta/1e3)
                 longitudinal_canvas.draw()
@@ -559,7 +585,25 @@ class BoreBarGUI(QMainWindow):
             update_longitudinal()
             
             dialog.exec_()
-            
+
+            try:
+                update_torsional()
+            except Exception as e:
+                print(f"Ошибка при построении крутильных колебаний: {str(e)}")
+                torsional_ax.clear()
+                torsional_ax.text(0.5, 0.5, 'Ошибка при построении', 
+                                ha='center', va='center')
+                torsional_canvas.draw()
+                
+            try:
+                update_longitudinal()
+            except Exception as e:
+                print(f"Ошибка при построении продольных колебаний: {str(e)}")
+                longitudinal_ax.clear()
+                longitudinal_ax.text(0.5, 0.5, 'Ошибка при построении', 
+                                ha='center', va='center')
+                longitudinal_canvas.draw()
+                
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось запустить интерактивный режим: {str(e)}")
 
@@ -699,18 +743,62 @@ class BoreBarGUI(QMainWindow):
         ax1 = self.torsional_figure.add_subplot(gs[0, 0])  # Кривая D-разбиения
         ax2 = self.torsional_figure.add_subplot(gs[0, 1])  # Диаграмма устойчивости
         
-        # Вычисляем константы из параметров
-        lambda1 = np.sqrt(params['rho'] * params['G']) * params['Jp'] / params['Jr']
-        lambda2 = params['length'] * np.sqrt(params['rho'] / params['G'])
+        # Получаем параметры из UI
+        rho = params['rho']
+        G = params['G']
+        Jp = params['Jp']
+        Jr = params['Jr']
         delta1 = params['delta1'] * params['multiplier']
+        length = params['length']
         
+        # Вычисляем константы
+        lambda1 = np.sqrt(rho * G) * Jp / Jr
+        lambda2 = length * np.sqrt(rho / G)
+        
+        print("\n=== Параметры системы для крутильных колебаний ===")
+        print(f"ρ = {rho:.1f} кг/м³, G = {G:.2e} Па")
+        print(f"Jp = {Jp:.2e} м⁴, Jr = {Jr:.2e} кг·м²")
+        print(f"L = {length} м, δ₁ = {delta1:.2e} с")
+        print(f"\n1. Вычисленные константы:")
+        print(f"λ₁ = sqrt(ρ*G)*Jp/Jr = {lambda1:.2e}")
+        print(f"λ₂ = L*sqrt(ρ/G) = {lambda2:.2e}")
+        print(f"δ₁ (с учетом множителя) = {delta1:.2e} с")
+
         # 1. Кривая D-разбиения
         omega = np.linspace(1000, 15000, 1000)
         p = 1j * omega
+        
         with np.errstate(all='ignore'):
+            # Улучшенное вычисление с масштабированием
             expr = np.sqrt(1 + delta1 * p)
-            sigma = -p - lambda1 * expr * (1 / np.tanh(lambda2 * p / expr))
+            
+            # Вычисление coth с защитой от переполнения
+            coth_arg = lambda2 * p / expr
+            # Масштабирование аргумента для избежания переполнения
+            scaled_arg = np.where(np.abs(coth_arg) > 100, 
+                            100 * np.sign(coth_arg), 
+                            coth_arg)
+            coth = (np.exp(2*scaled_arg) + 1) / (np.exp(2*scaled_arg) - 1)
+            coth = np.nan_to_num(coth, nan=1.0, posinf=1.0, neginf=-1.0)
+            
+            sigma = -p - lambda1 * expr * coth
             sigma = np.nan_to_num(sigma, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        # Фильтрация аномально больших значений
+        valid = (np.abs(sigma.real) < 1e6) & (np.abs(sigma.imag) < 1e6)
+        sigma = sigma[valid]
+        omega = omega[valid]
+        
+        print("\n2. Проверка кривой D-разбиения:")
+        print(f"Первая точка: ω={omega[0]:.2f}, Re(σ)={sigma.real[0]:.2f}, Im(σ)={sigma.imag[0]:.2f}")
+        print(f"Последняя точка: ω={omega[-1]:.2f}, Re(σ)={sigma.real[-1]:.2f}, Im(σ)={sigma.imag[-1]:.2f}")
+        
+        # Проверка асимптотики при ω→0
+        if len(omega) > 0:
+            omega_small = omega[0]
+            sigma_small = sigma[0]
+            print("\n3. Проверка асимптотики при ω→0:")
+            print(f"σ(ω→{omega_small:.2f}) ≈ {sigma_small.real:.2f}+{sigma_small.imag:.2f}j")
         
         ax1.plot(sigma.real, sigma.imag, 'b-', linewidth=1.5)
         ax1.axhline(0, color='red', linestyle='--', linewidth=0.7)
@@ -719,44 +807,91 @@ class BoreBarGUI(QMainWindow):
         ax1.set_xlabel('Re(σ)', fontsize=8)
         ax1.set_ylabel('Im(σ)', fontsize=8)
         ax1.grid(True, which='both', linestyle=':', alpha=0.7)
-        ax1.set_xlim(-15000, 500)
-        ax1.set_ylim(-8000, 8000)
+        
+        # Автоматическая настройка масштаба с учетом данных
+        if len(sigma.real) > 0:
+            x_pad = 0.1 * (np.max(sigma.real) - np.min(sigma.real))
+            y_pad = 0.1 * (np.max(sigma.imag) - np.min(sigma.imag))
+            ax1.set_xlim(np.min(sigma.real)-x_pad, np.max(sigma.real)+x_pad)
+            ax1.set_ylim(np.min(sigma.imag)-y_pad, np.max(sigma.imag)+y_pad)
         
         # 2. Диаграмма устойчивости для разных длин
         lengths = np.array([2.5, 3, 4, 5, 6])
         multipliers = np.array([1, 2, 3, 4, 6, 10])
         delta1_values = params['delta1'] * multipliers
-        lambda2_values = lengths * np.sqrt(params['rho'] / params['G'])
+        lambda2_values = lengths * np.sqrt(rho / G)
         colors = plt.cm.viridis(np.linspace(0, 1, len(lengths)))
+        
+        print("\n4. Вычисление диаграммы устойчивости:")
         
         for i, l in enumerate(lengths):
             Sigma = np.zeros(len(delta1_values))
             
             for j, delta in enumerate(delta1_values):
-                def im_sigma(omega):
-                    p = 1j * omega
+                def im_sigma(omega_val):
+                    p_val = 1j * omega_val
                     with np.errstate(all='ignore'):
-                        sqrt_expr = np.sqrt(1 + delta * p)
-                        cth = 1 / np.tanh(lambda2_values[i] * p / sqrt_expr)
-                        val = -p - lambda1 * sqrt_expr * cth
+                        sqrt_expr = np.sqrt(1 + delta * p_val)
+                        coth_arg = lambda2_values[i] * p_val / sqrt_expr
+                        # Масштабирование аргумента
+                        scaled_arg = np.where(np.abs(coth_arg) > 100, 
+                                        100 * np.sign(coth_arg), 
+                                        coth_arg)
+                        coth = (np.exp(2*scaled_arg) + 1) / (np.exp(2*scaled_arg) - 1)
+                        coth = np.nan_to_num(coth, nan=1.0, posinf=1.0, neginf=-1.0)
+                        val = -p_val - lambda1 * sqrt_expr * coth
                         return val.imag
                 
                 try:
-                    omega_sol = root_scalar(im_sigma, bracket=[500, 2000], method='brentq').root
-                    p = 1j * omega_sol
-                    with np.errstate(all='ignore'):
-                        sqrt_expr = np.sqrt(1 + delta * p)
-                        cth = 1 / np.tanh(lambda2_values[i] * p / sqrt_expr)
-                        Sigma[j] = (-p - lambda1 * sqrt_expr * cth).real
-                except:
+                    # Адаптивный поиск корня
+                    omega_min = 100
+                    omega_max = 2000
+                    
+                    # Для больших длин уменьшаем верхнюю границу
+                    if l >= 5.5:
+                        omega_max = 1000
+                    
+                    # Проверка знаков на границах
+                    f_min = im_sigma(omega_min)
+                    f_max = im_sigma(omega_max)
+                    
+                    if f_min * f_max < 0:
+                        sol = root_scalar(im_sigma, 
+                                        bracket=[omega_min, omega_max],
+                                        method='brentq',
+                                        xtol=1e-6,
+                                        rtol=1e-6)
+                        omega_sol = sol.root
+                        
+                        p_sol = 1j * omega_sol
+                        with np.errstate(all='ignore'):
+                            sqrt_expr = np.sqrt(1 + delta * p_sol)
+                            coth_arg = lambda2_values[i] * p_sol / sqrt_expr
+                            scaled_arg = np.where(np.abs(coth_arg) > 100, 
+                                            100 * np.sign(coth_arg), 
+                                            coth_arg)
+                            coth = (np.exp(2*scaled_arg) + 1) / (np.exp(2*scaled_arg) - 1)
+                            coth = np.nan_to_num(coth, nan=1.0, posinf=1.0, neginf=-1.0)
+                            Sigma[j] = (-p_sol - lambda1 * sqrt_expr * coth).real
+                        
+                        print(f"L={l} м, δ₁={delta:.2e}: ω={omega_sol:.1f}, Re(σ)={Sigma[j]:.1f}")
+                    else:
+                        Sigma[j] = np.nan
+                        print(f"Ошибка для L={l} м, δ₁={delta:.2e}: f(a) and f(b) must have different signs")
+                        
+                except Exception as e:
                     Sigma[j] = np.nan
+                    print(f"Ошибка для L={l} м, δ₁={delta:.2e}: {str(e)}")
             
             valid = ~np.isnan(Sigma)
-            ax2.plot(delta1_values[valid], Sigma[valid], 'o-', color=colors[i], 
-                    label=f'L={l} м', markersize=4, linewidth=1.5)
+            if np.any(valid):
+                ax2.plot(delta1_values[valid], Sigma[valid], 'o-', color=colors[i], 
+                        label=f'L={l} м', markersize=4, linewidth=1.5)
+            else:
+                ax2.plot([], [], 'o-', color=colors[i], label=f'L={l} м (нет решений)')
         
         ax2.axhline(0, color='k', linestyle='--', linewidth=0.8)
-        ax2.fill_between(delta1_values, -1500, 0, color='green', alpha=0.15)
+        ax2.fill_between([3.44e-6, 3.44e-5], -1500, 0, color='green', alpha=0.15)
         ax2.set_xscale('log')
         ax2.set_ylim(-1500, 100)
         ax2.set_xlabel('Коэффициент внутреннего трения δ₁ (с)', fontsize=8)
@@ -768,126 +903,162 @@ class BoreBarGUI(QMainWindow):
         self.torsional_figure.tight_layout()
         self.torsional_canvas.draw()
 
+    def save_torsional_data(self):
+        """Сохранение данных крутильных колебаний в файл"""
+        try:
+            if not hasattr(self, 'torsional_data'):
+                return
+                
+            # Создаем имя файла с текущей датой и временем
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"torsional_data_{timestamp}.csv"
+            
+            with open(filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                
+                # Записываем основные параметры
+                writer.writerow(['Parameter', 'Value'])
+                writer.writerow(['lambda1', self.torsional_data['lambda1']])
+                writer.writerow(['lambda2', self.torsional_data['lambda2']])
+                writer.writerow(['delta1', self.torsional_data['delta1']])
+                
+                # Записываем данные D-разбиения
+                writer.writerow([])  # Пустая строка для разделения
+                writer.writerow(['D-partition data'])
+                writer.writerow(['omega', 'sigma_real', 'sigma_imag'])
+                for i in range(len(self.torsional_data['omega'])):
+                    writer.writerow([
+                        self.torsional_data['omega'][i],
+                        self.torsional_data['sigma_real'][i],
+                        self.torsional_data['sigma_imag'][i]
+                    ])
+                
+                # Записываем данные устойчивости
+                writer.writerow([])  # Пустая строка для разделения
+                writer.writerow(['Stability data'])
+                for stability in self.torsional_data['stability']:
+                    writer.writerow([f'Length = {stability["length"]} m'])
+                    writer.writerow(['delta1', 'sigma'])
+                    for i in range(len(stability['delta1_values'])):
+                        writer.writerow([
+                            stability['delta1_values'][i],
+                            stability['sigma_values'][i]
+                        ])
+                    writer.writerow([])  # Пустая строка между разными длинами
+            
+            print(f"\nДанные сохранены в файл: {filename}")
+            
+        except Exception as e:
+            print(f"Ошибка при сохранении данных: {str(e)}")
+
     def analyze_longitudinal(self, params):
+        """Анализ продольных колебаний с построением D-разбиения и проверочными вычислениями"""
         self.longitudinal_figure.clear()
+        ax = self.longitudinal_figure.add_subplot(111)
         
-        # Создаем сетку графиков
-        gs = self.longitudinal_figure.add_gridspec(1, 2)
-        ax1 = self.longitudinal_figure.add_subplot(gs[0, 0])  # D-разбиение
-        ax2 = self.longitudinal_figure.add_subplot(gs[0, 1])  # Устойчивость
-
-        # Параметры системы
-        E = params['E']          # Модуль Юнга [Па]
-        rho = params['rho']      # Плотность [кг/м³]
-        S = params['S']          # Площадь сечения [м²]
-        mu = params['mu']        # Коэффициент трения
-        tau = params['tau']      # Время запаздывания [с]
-        L = params['length']     # Длина [м]
-
-        # Расчетные параметры
-        a = np.sqrt(E/rho)  # Скорость волны
+        # Получаем параметры из UI
+        E = params['E']
+        S = params['S']
+        rho = params['rho']
+        L = params['length']
+        mu = params['mu']
+        tau = params['tau']
         
-        # Оптимальный диапазон частот (подобран экспериментально)
-        omega = np.linspace(0.01, 2*np.pi*100, 5000)  # Более узкий и плотный диапазон
+        # ===== ПРОВЕРОЧНЫЕ ВЫЧИСЛЕНИЯ =====
+        print("\n=== Параметры системы ===")
+        print(f"E = {E:.2e} Па, S = {S:.2e} м², ρ = {rho:.1f} кг/м³")
+        print(f"L = {L} м, μ = {mu}, τ = {tau:.3f} с")
         
-        # 1. Улучшенный расчет D-разбиения
+        # 1. Проверка скорости волны
+        a = np.sqrt(E/rho)
+        print(f"\n1. Скорость волны:")
+        print(f"a = sqrt(E/ρ) = sqrt({E:.2e}/{rho:.1f}) = {a:.2f} м/с")
+        
+        # 2. Проверка основной частоты
+        omega_main = np.pi*a/L
+        print(f"\n2. Основная частота:")
+        print(f"ω_main = π*a/L = π*{a:.2f}/{L} = {omega_main:.2f} рад/с ({omega_main/(2*np.pi):.2f} Гц)")
+        
+        # Генерируем диапазон частот
+        omega = np.linspace(0.01, 2*np.pi*100, 5000)
+        
         with np.errstate(all='ignore'):
+            # 3. Проверка вычисления x = ω*L/a
             x = omega * L / a
-            # Избегаем точек сингулярности cot(x)
+            print(f"\n3. Диапазон x = ω*L/a: от {x.min():.2f} до {x.max():.2f}")
+            
+            # 4. Проверка cot(x)
             mask = (np.abs(np.sin(x)) > 1e-6)
             cot = np.zeros_like(x)
             cot[mask] = 1/np.tan(x[mask])
+            print(f"Условия при sin(x)≈0: {np.sum(~mask)} точек из {len(x)}")
             
-            # Избегаем деления на ноль в знаменателе
+            # 5. Проверка знаменателя
             denom = 1 - mu * np.cos(omega * tau)
             denom_mask = np.abs(denom) > 1e-6
+            print(f"Условия при denom≈0: {np.sum(~denom_mask)} точек из {len(x)}")
             
-            # Комбинированная маска валидных точек
             valid = mask & denom_mask
             
+            # 6. Вычисление K1 и delta
             K1 = np.full_like(omega, np.nan)
             delta = np.full_like(omega, np.nan)
             
             K1[valid] = (E*S/a) * omega[valid] * cot[valid] / denom[valid]
             delta[valid] = -(E*S*mu/a) * cot[valid] * np.sin(omega[valid]*tau) / denom[valid]
             
-            # Дополнительная фильтрация физически возможных значений
+            # Фильтрация недопустимых значений
             valid = valid & (K1 > 0) & (K1 < 1e10) & (np.abs(delta) < 1e6)
             K1 = K1[valid]
             delta = delta[valid]
-            omega = omega[valid]
-
-        # Построение D-разбиения с правильными пределами
-        ax1.plot(K1/1e6, delta/1e3, 'b-', linewidth=1)
-        ax1.set_title('Кривая D-разбиения для продольных колебаний', fontsize=10)
-        ax1.set_xlabel('K₁, МН/м', fontsize=8)
-        ax1.set_ylabel('δ, кН·с/м', fontsize=8)
-        ax1.grid(True, which='both', linestyle=':', alpha=0.7)
-        
-        # Установка правильных пределов для осей
-        ax1.set_xlim(0, 20)  # Ограничение по K1
-        ax1.set_ylim(-150, 50)  # Ограничение по δ
-        
-        # 2. Анализ устойчивости для разных длин
-        lengths = np.array([2.5, 3, 4, 5, 6])
-        mu_values = np.linspace(0.05, 0.5, 20)
-        colors = plt.cm.viridis(np.linspace(0, 1, len(lengths)))
-        
-        for i, l in enumerate(lengths):
-            critical_deltas = []
-            for mu_val in mu_values:
-                try:
-                    # Основная частота с поправкой
-                    omega_crit = (np.pi * a) / (2 * l) * 0.99  # Коэффициент 0.99 для избежания сингулярности
-                    
-                    # Безопасный расчет
-                    x_crit = omega_crit * l / a
-                    if np.abs(np.sin(x_crit)) < 1e-6:
-                        critical_deltas.append(np.nan)
-                        continue
-                        
-                    cot_crit = 1/np.tan(x_crit)
-                    denom_crit = 1 - mu_val * np.cos(omega_crit * tau)
-                    
-                    if np.abs(denom_crit) < 1e-6:
-                        critical_deltas.append(np.nan)
-                    else:
-                        delta_crit = - (E*S*mu_val/a) * cot_crit * \
-                                    np.sin(omega_crit*tau) / denom_crit
-                        critical_deltas.append(delta_crit)
-                except:
-                    critical_deltas.append(np.nan)
+            omega_valid = omega[valid]
             
-            # Отображаем только валидные значения
-            valid = ~np.isnan(critical_deltas)
-            ax2.plot(mu_values[valid], np.array(critical_deltas)[valid]/1e3, 
-                    'o-', color=colors[i], markersize=3, label=f'L={l}м')
-
-        ax2.set_title('Границы устойчивости', fontsize=10)
-        ax2.set_xlabel('μ', fontsize=8)
-        ax2.set_ylabel('Критическое δ, кН·с/м', fontsize=8)
-        ax2.legend(fontsize=8)
-        ax2.grid(True, which='both', linestyle=':', alpha=0.7)
-        ax2.set_ylim(-10, 15)  # Ограничение по разумным значениям
+            print(f"\n4. Результаты после фильтрации:")
+            print(f"Осталось {len(K1)} точек из {len(x)}")
+            
+            # 7. Проверка крайних точек
+            if len(K1) > 0:
+                print("\n5. Крайние точки D-разбиения:")
+                print(f"Первая точка: ω={omega_valid[0]:.2f}, K1={K1[0]/1e6:.2f} МН/м, δ={delta[0]/1e3:.2f} кН·с/м")
+                print(f"Последняя точка: ω={omega_valid[-1]:.2f}, K1={K1[-1]/1e6:.2f} МН/м, δ={delta[-1]/1e3:.2f} кН·с/м")
+                
+                # 8. Проверка вблизи ω=0 (асимптотика)
+                print("\n6. Проверка асимптотики при ω→0:")
+                K1_0 = (E*S)/(L*(1 - mu))
+                delta_0 = - (E*S*mu*tau)/(L*(1 - mu))
+                print(f"K1(ω→0) = {K1_0/1e6:.2f} МН/м (ожидается ~17-18 МН/м)")
+                print(f"δ(ω→0) = {delta_0/1e3:.2f} кН·с/м (ожидается ~-100 кН·с/м)")
+        
+        # ===== ВИЗУАЛИЗАЦИЯ =====
+        if len(K1) > 0:
+            ax.plot(K1/1e6, delta/1e3, 'b-', linewidth=1.5)
+            ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
+            ax.fill_between([0, 20], -150, 0, color='green', alpha=0.15)
+            
+            ax.set_title('D-разбиение для продольных колебаний', fontsize=10)
+            ax.set_xlabel('K₁, МН/м', fontsize=8)
+            ax.set_ylabel('δ, кН·с/м', fontsize=8)
+            ax.grid(True, which='both', linestyle=':', alpha=0.7)
+            ax.set_xlim(0, 20)
+            ax.set_ylim(-150, 50)
+            
+            # Добавляем пояснительные надписи с проверочными значениями
+            info_text = (
+                f"Проверочные значения (L={L} м):\n"
+                f"a = {a:.2f} м/с\n"
+                f"ω_main = {omega_main:.2f} рад/с\n"
+                f"K1(0) = {K1_0/1e6:.2f} МН/м\n"
+                f"δ(0) = {delta_0/1e3:.2f} кН·с/м"
+            )
+            ax.text(12, -120, info_text, bbox=dict(facecolor='white', alpha=0.8))
+        else:
+            ax.text(0.5, 0.5, 'Нет данных для построения графика\nПроверьте параметры', 
+                ha='center', va='center', transform=ax.transAxes)
+            print("\nОШИБКА: Нет данных для построения графика!")
         
         self.longitudinal_figure.tight_layout()
         self.longitudinal_canvas.draw()
-        
-        # Проверочные вычисления
-        print("\n=== Проверочные вычисления ===")
-        print(f"Скорость волны: {a:.2f} м/с")
-        print(f"Основная частота для L={L}m: {a/(2*L):.2f} рад/с")
-        print(f"Диапазон K1: {np.min(K1)/1e6:.2f} - {np.max(K1)/1e6:.2f} МН/м")
-        print(f"Диапазон δ: {np.min(delta)/1e3:.2f} - {np.max(delta)/1e3:.2f} кН·с/м")
-
-        # Проверка крайних значений
-        print(f"\nКрайние точки D-разбиения:")
-        print(f"Первая точка: K1={K1[0]/1e6:.2f} МН/м, δ={delta[0]/1e3:.2f} кН·с/м")
-        print(f"Последняя точка: K1={K1[-1]/1e6:.2f} МН/м, δ={delta[-1]/1e3:.2f} кН·с/м")
-
-        # Проверка устойчивости для L=2.5m
-        print(f"\nКритические значения для L=2.5m:")
-        print(f"При μ=0.1: δ={critical_deltas[1]/1e3:.2f} кН·с/м")
 
     def analyze_comparative(self, params):
         """Сравнительный анализ крутильных и продольных колебаний"""
