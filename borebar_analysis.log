@@ -1,0 +1,5 @@
+2025-06-17 16:08:20,116 - INFO - Starting torsional calculation
+2025-06-17 16:08:20,117 - INFO - Calculated parameters: lambda1=18467.6983610225, lambda2=0.0007806247497997998, delta1=3e-06
+2025-06-17 16:08:20,120 - INFO - Valid points count: 5000
+2025-06-17 16:08:20,123 - INFO - Real part range: -972452.0942986851 to -70.97282128041303
+2025-06-17 16:08:20,124 - INFO - Imag part range: -499343.94948774896 to 472928.2531535707

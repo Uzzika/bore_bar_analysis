@@ -46,12 +46,12 @@ class BoreBarModel:
         mu = params['mu']
         tau = params['tau']
 
-        a = np.sqrt(E/rho)
-        omega_main = np.pi*a/L
+        a2 = E / rho
+        omega_main = np.pi*a2/L
         omega = np.linspace(0.01, 2*np.pi*100, 5000)
 
         with np.errstate(all='ignore'):
-            x = omega * L / a
+            x = omega * L / a2
             mask = (np.abs(np.sin(x)) > 1e-6)
             cot = np.zeros_like(x)
             cot[mask] = 1/np.tan(x[mask])
@@ -64,8 +64,8 @@ class BoreBarModel:
             K1 = np.full_like(omega, np.nan)
             delta = np.full_like(omega, np.nan)
             
-            K1[valid] = (E*S/a) * omega[valid] * cot[valid] / denom[valid]
-            delta[valid] = -(E*S*mu/a) * cot[valid] * np.sin(omega[valid]*tau) / denom[valid]
+            K1[valid] = (E*S/a2) * omega[valid] * cot[valid] / denom[valid]
+            delta[valid] = -(E*S*mu/a2) * cot[valid] * np.sin(omega[valid]*tau) / denom[valid]
             
             valid = valid & (K1 > 0) & (K1 < 1e10) & (np.abs(delta) < 1e6)
             
@@ -73,7 +73,7 @@ class BoreBarModel:
             'omega': omega[valid],
             'K1': K1[valid],
             'delta': delta[valid],
-            'a': a,
+            'a': a2,
             'omega_main': omega_main,
             'K1_0': (E*S)/(L*(1 - mu)),
             'delta_0': - (E*S*mu*tau)/(L*(1 - mu))
@@ -96,7 +96,7 @@ class BoreBarModel:
 
     @staticmethod
     def find_intersection(params):
-        """Поиск точки пересечения с осью Re(σ) = 0 для крутильных колебаний"""
+        """Поиск точки пересечения с осью Im(σ) = 0 для крутильных колебаний"""
         rho = params['rho']
         G = params['G']
         Jp = params['Jp']
@@ -107,7 +107,7 @@ class BoreBarModel:
         lambda1 = np.sqrt(rho * G) * Jp / Jr
         lambda2 = length * np.sqrt(rho / G)
 
-        def re_sigma(omega_val):
+        def im_sigma(omega_val):
             p_val = 1j * omega_val
             with np.errstate(all='ignore'):
                 sqrt_expr = np.sqrt(1 + delta1 * p_val)
@@ -115,14 +115,14 @@ class BoreBarModel:
                 coth_arg = np.where(np.abs(coth_arg) > 100, 100 * np.sign(coth_arg), coth_arg)
                 cth = (np.exp(2 * coth_arg) + 1) / (np.exp(2 * coth_arg) - 1)
                 cth = np.nan_to_num(cth, nan=1.0, posinf=1.0, neginf=-1.0)
-                return (-p_val - lambda1 * sqrt_expr * cth).real
+                return (-p_val - lambda1 * sqrt_expr * cth).imag
 
         try:
-            brackets = [(10, 100), (100, 1000), (1000, 10000), (10000, 30000)]
+            brackets = [(500, 2000), (2000, 5000), (5000, 10000), (10000, 20000)]
             omega_cross = None
             for bracket in brackets:
                 try:
-                    sol = root_scalar(re_sigma, bracket=bracket, method='brentq')
+                    sol = root_scalar(im_sigma, bracket=bracket, method='brentq')
                     if sol.converged:
                         omega_cross = sol.root
                         break
@@ -133,16 +133,17 @@ class BoreBarModel:
                 return None
 
             p_cross = 1j * omega_cross
-            expr_cross = np.sqrt(1 + delta1 * p_cross)
-            arg_cross = lambda2 * p_cross / expr_cross
-            arg_cross = np.where(np.abs(arg_cross) > 100, 100 * np.sign(arg_cross), arg_cross)
-            coth_cross = (np.exp(2 * arg_cross) + 1) / (np.exp(2 * arg_cross) - 1)
-            im_sigma = (-p_cross - lambda1 * expr_cross * coth_cross).imag
+            sqrt_expr = np.sqrt(1 + delta1 * p_cross)
+            coth_arg = lambda2 * p_cross / sqrt_expr
+            coth_arg = np.where(np.abs(coth_arg) > 100, 100 * np.sign(coth_arg), coth_arg)
+            cth = (np.exp(2 * coth_arg) + 1) / (np.exp(2 * coth_arg) - 1)
+            cth = np.nan_to_num(cth, nan=1.0, posinf=1.0, neginf=-1.0)
+            sigma_val = -p_cross - lambda1 * sqrt_expr * cth
 
             return {
                 'omega': omega_cross,
-                'im_sigma': im_sigma,
-                'frequency': omega_cross/(2*np.pi)
+                're_sigma': sigma_val.real,
+                'frequency': omega_cross / (2 * np.pi)
             }
         except Exception:
             return None

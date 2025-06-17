@@ -301,32 +301,38 @@ class BoreBarGUI(QMainWindow):
     def analyze_torsional(self, params):
         self.torsional_figure.clear()
         ax = self.torsional_figure.add_subplot(111)
-        
+
         result = self.model.calculate_torsional(params)
-        
+
+        # Построение кривой D-разбиения (σ = Re + j·Im)
         ax.plot(result['sigma_real'], result['sigma_imag'], 'b-', linewidth=1.5)
+
+        # Добавление осей
         ax.axhline(0, color='red', linestyle='--', linewidth=0.7)
         ax.axvline(0, color='red', linestyle='--', linewidth=0.7)
+
         ax.set_title('Кривая D-разбиения для крутильных колебаний', fontsize=10)
         ax.set_xlabel('Re(σ)', fontsize=8)
         ax.set_ylabel('Im(σ)', fontsize=8)
         ax.grid(True, which='both', linestyle=':', alpha=0.7)
         ax.set_xlim(-1e5, 1e5)
         ax.set_ylim(-1e5, 1e5)
-        
+
+        # Поиск точки пересечения с осью Im(σ) = 0
         intersection = self.model.find_intersection(params)
-        if intersection:
-            ax.plot(0, intersection['im_sigma'], 'ro', markersize=8, label='Пересечение с Re(σ)=0')
+        if intersection is not None:
+            ax.plot(intersection['re_sigma'], 0, 'ro', markersize=8, label='Пересечение с Im(σ)=0')
             ax.legend()
             self.intersection_label.setText(
                 f"ω = {intersection['omega']:.2f} рад/с\n"
-                f"Im(σ) = {intersection['im_sigma']:.2f}\n"
+                f"Re(σ) = {intersection['re_sigma']:.2f}\n"
                 f"Частота: {intersection['frequency']:.2f} Гц"
             )
         else:
-            self.intersection_label.setText("Кривая не пересекает ось Re(σ)=0.")
-        
+            self.intersection_label.setText("Пересечение с Im(σ)=0 не найдено.")
+
         self.torsional_canvas.draw()
+
 
     def analyze_longitudinal(self, params):
         self.longitudinal_figure.clear()
@@ -337,23 +343,15 @@ class BoreBarGUI(QMainWindow):
         if len(result['K1']) > 0:
             ax.plot(result['K1']/1e6, result['delta']/1e3, 'b-', linewidth=1.5)
             ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
-            ax.fill_between([0, 20], -150, 0, color='green', alpha=0.15)
             
             ax.set_title('D-разбиение для продольных колебаний', fontsize=10)
             ax.set_xlabel('K₁, МН/м', fontsize=8)
             ax.set_ylabel('δ, кН·с/м', fontsize=8)
             ax.grid(True, which='both', linestyle=':', alpha=0.7)
-            ax.set_xlim(0, 20)
-            ax.set_ylim(-150, 50)
+            ax.set_xlim(13, 19)
+            ax.set_ylim(-100, 50)
             
-            info_text = (
-                f"Проверочные значения (L={params['length']} м):\n"
-                f"a = {result['a']:.2f} м/с\n"
-                f"ω_main = {result['omega_main']:.2f} рад/с\n"
-                f"K1(0) = {result['K1_0']/1e6:.2f} МН/м\n"
-                f"δ(0) = {result['delta_0']/1e3:.2f} кН·с/м"
-            )
-            ax.text(12, -120, info_text, bbox=dict(facecolor='white', alpha=0.8))
+
         else:
             ax.text(0.5, 0.5, 'Нет данных для построения графика\nПроверьте параметры', 
                    ha='center', va='center', transform=ax.transAxes)
