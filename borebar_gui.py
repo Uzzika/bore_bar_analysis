@@ -12,6 +12,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.backend_bases import MouseButton
 from borebar_model import BoreBarModel
+from scipy.optimize import root_scalar
 
 logging.basicConfig(filename='borebar_analysis.log', 
                    level=logging.INFO,
@@ -153,15 +154,15 @@ class BoreBarGUI(QMainWindow):
     def setup_analysis_tabs(self):
         self.torsional_tab = QWidget()
         self.longitudinal_tab = QWidget()
-        self.comparative_tab = QWidget()
+        self.stability_tab = QWidget()
         
         self.setup_torsional_tab()
         self.setup_longitudinal_tab()
-        self.setup_comparative_tab()
+        self.setup_stability_tab()
         
         self.tabs.addTab(self.torsional_tab, "Крутильные колебания")
         self.tabs.addTab(self.longitudinal_tab, "Продольные колебания")
-        self.tabs.addTab(self.comparative_tab, "Сравнительный анализ")
+        self.tabs.addTab(self.stability_tab, "Диаграмма устойчивости")
         
     def setup_torsional_tab(self):
         layout = QVBoxLayout(self.torsional_tab)
@@ -174,12 +175,6 @@ class BoreBarGUI(QMainWindow):
         self.longitudinal_figure = Figure()
         self.longitudinal_canvas = FigureCanvas(self.longitudinal_figure)
         layout.addWidget(self.longitudinal_canvas)
-        
-    def setup_comparative_tab(self):
-        layout = QVBoxLayout(self.comparative_tab)
-        self.comparative_figure = Figure()
-        self.comparative_canvas = FigureCanvas(self.comparative_figure)
-        layout.addWidget(self.comparative_canvas)
         
     def setup_control_buttons(self):
         buttons_layout = QHBoxLayout()
@@ -290,8 +285,6 @@ class BoreBarGUI(QMainWindow):
                 self.analyze_torsional(params)
             elif current_tab == 1:
                 self.analyze_longitudinal(params)
-            elif current_tab == 2:
-                self.analyze_comparative(params)
                 
             self.status_bar.showMessage("Анализ успешно завершен", 3000)
         except Exception as e:
@@ -302,26 +295,43 @@ class BoreBarGUI(QMainWindow):
         self.torsional_figure.clear()
         ax = self.torsional_figure.add_subplot(111)
 
+        # 1) Получаем результаты
         result = self.model.calculate_torsional(params)
 
-        # Построение кривой D-разбиения (σ = Re + j·Im)
-        ax.plot(result['sigma_real'], result['sigma_imag'], 'b-', linewidth=1.5)
+        # --- DEBUG PRINTS: проверяем данные перед построением ---
+        print("=== Torsional analysis ===")
+        print(f"Points count: {len(result['sigma_real'])}")
+        print(f"L: {params['length']}")
 
-        # Добавление осей
+        if result['sigma_real'].any():
+            print(f"Re(σ) range: {min(result['sigma_real']):.4e} … {max(result['sigma_real']):.4e}")
+        if result['sigma_imag'].any():
+            print(f"Im(σ) range: {min(result['sigma_imag']):.4e} … {max(result['sigma_imag']):.4e}")
+
+        # 2) Рисуем D-разбиение
+        ax.plot(result['sigma_real'], result['sigma_imag'], 'b-', linewidth=1.5)
         ax.axhline(0, color='red', linestyle='--', linewidth=0.7)
         ax.axvline(0, color='red', linestyle='--', linewidth=0.7)
 
+        # 3) Автоматические оси
+        ax.relim()
+        ax.autoscale_view()
+        ax.margins(x=0.05, y=0.05)
+
+        # --- DEBUG PRINT: проверяем лимиты осей после autoscale ---
+        print(f"Auto xlim: {ax.get_xlim()}")
+        print(f"Auto ylim: {ax.get_ylim()}")
+
+        # 4) Оформление
         ax.set_title('Кривая D-разбиения для крутильных колебаний', fontsize=10)
         ax.set_xlabel('Re(σ)', fontsize=8)
         ax.set_ylabel('Im(σ)', fontsize=8)
         ax.grid(True, which='both', linestyle=':', alpha=0.7)
-        ax.set_xlim(-1e5, 1e5)
-        ax.set_ylim(-1e5, 1e5)
 
-        # Поиск точки пересечения с осью Im(σ) = 0
+        # 5) Точка пересечения с Im(σ)=0
         intersection = self.model.find_intersection(params)
         if intersection is not None:
-            ax.plot(intersection['re_sigma'], 0, 'ro', markersize=8, label='Пересечение с Im(σ)=0')
+            ax.plot(intersection['re_sigma'], 0, 'ro', markersize=8, label='Пересечение')
             ax.legend()
             self.intersection_label.setText(
                 f"ω = {intersection['omega']:.2f} рад/с\n"
@@ -333,59 +343,47 @@ class BoreBarGUI(QMainWindow):
 
         self.torsional_canvas.draw()
 
-
     def analyze_longitudinal(self, params):
         self.longitudinal_figure.clear()
         ax = self.longitudinal_figure.add_subplot(111)
-        
+
+        # 1) Получаем результаты
         result = self.model.calculate_longitudinal(params)
-        
+
         if len(result['K1']) > 0:
-            ax.plot(result['K1']/1e6, result['delta']/1e3, 'b-', linewidth=1.5)
+            # Переводим в читаемые единицы
+            K1_MN   = result['K1']   / 1e6
+            delta_k = result['delta'] / 1e3
+
+            # --- DEBUG PRINTS: проверяем данные перед построением ---
+            print("=== Longitudinal analysis ===")
+            print(f"Points count: {len(K1_MN)}")
+            print(f"K₁ range (МН/м): {min(K1_MN):.4f} … {max(K1_MN):.4f}")
+            print(f"δ  range (кН·с/м): {min(delta_k):.4f} … {max(delta_k):.4f}")
+
+            # 2) Рисуем граничную кривую
+            ax.plot(K1_MN, delta_k, 'b-', linewidth=1.5)
             ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
-            
+
+            # 3) Автоматические оси
+            ax.relim()
+            ax.autoscale_view()
+            ax.margins(x=0.05, y=0.05)
+
+            # --- DEBUG PRINT: проверяем лимиты осей после autoscale ---
+            print(f"Auto xlim: {ax.get_xlim()}")
+            print(f"Auto ylim: {ax.get_ylim()}")
+
+            # 4) Оформление
             ax.set_title('D-разбиение для продольных колебаний', fontsize=10)
             ax.set_xlabel('K₁, МН/м', fontsize=8)
             ax.set_ylabel('δ, кН·с/м', fontsize=8)
             ax.grid(True, which='both', linestyle=':', alpha=0.7)
-            ax.set_xlim(13, 19)
-            ax.set_ylim(-100, 50)
-            
-
         else:
-            ax.text(0.5, 0.5, 'Нет данных для построения графика\nПроверьте параметры', 
-                   ha='center', va='center', transform=ax.transAxes)
-        
-        self.longitudinal_canvas.draw()
+            ax.text(0.5, 0.5, 'Нет данных для построения графика\nПроверьте параметры',
+                    ha='center', va='center', transform=ax.transAxes)
 
-    def analyze_comparative(self, params):
-        self.comparative_figure.clear()
-        ax1 = self.comparative_figure.add_subplot(121)
-        ax2 = self.comparative_figure.add_subplot(122)
-        
-        result = self.model.calculate_comparative(params)
-        
-        ax1.plot(result['lengths'], result['torsional_freq']/1000, 'b-o', 
-                label='Крутильные', linewidth=1.5, markersize=4)
-        ax1.plot(result['lengths'], result['longitudinal_freq']/1000, 'r-s', 
-                label='Продольные', linewidth=1.5, markersize=4)
-        ax1.set_xlabel('Длина борштанги, м', fontsize=10)
-        ax1.set_ylabel('Частота (кГц)', fontsize=10)
-        ax1.set_title('Сравнение собственных частот', fontsize=12)
-        ax1.legend(fontsize=10)
-        ax1.grid(True, linestyle=':', alpha=0.7)
-        
-        ax2.plot(result['lengths'], result['stability_ratio']/result['stability_ratio'].max(), 
-                'g-^', linewidth=2, markersize=6)
-        ax2.set_xlabel('Длина борштанги, м', fontsize=10)
-        ax2.set_ylabel('Относительная устойчивость', fontsize=10)
-        ax2.set_title('Влияние длины на устойчивость', fontsize=12)
-        ax2.grid(True, linestyle=':', alpha=0.7)
-        ax2.text(3.5, 0.7, 'Уменьшение длины\nувеличивает устойчивость', 
-                fontsize=10, bbox=dict(facecolor='white', alpha=0.8))
-        
-        self.comparative_figure.tight_layout()
-        self.comparative_canvas.draw()
+        self.longitudinal_canvas.draw()
 
     def export_results(self):
         formats = ["JSON (*.json)", "CSV (*.csv)"]
@@ -404,7 +402,6 @@ class BoreBarGUI(QMainWindow):
                 'analysis': {
                     'torsional': self._get_torsional_results(),
                     'longitudinal': self._get_longitudinal_results(),
-                    'comparative': self._get_comparative_results()
                 }
             }
             
@@ -458,16 +455,6 @@ class BoreBarGUI(QMainWindow):
             'delta_0': result['delta_0']
         }
 
-    def _get_comparative_results(self):
-        params = self.get_current_parameters()
-        result = self.model.calculate_comparative(params)
-        return {
-            'lengths': result['lengths'],
-            'torsional_freq': result['torsional_freq'],
-            'longitudinal_freq': result['longitudinal_freq'],
-            'stability_ratio': result['stability_ratio']
-        }
-
     def _convert_to_serializable(self, data):
         if isinstance(data, (np.ndarray)):
             return data.tolist()
@@ -479,6 +466,74 @@ class BoreBarGUI(QMainWindow):
             return data
         else:
             return str(data)
+        
+    # --- Метод для настройки вкладки ---
+    def setup_stability_tab(self):
+        layout = QVBoxLayout(self.stability_tab)
+        self.stability_figure = Figure()
+        self.stability_canvas = FigureCanvas(self.stability_figure)
+        layout.addWidget(self.stability_canvas)
+
+        self.plot_stability_btn = QPushButton("Построить диаграмму устойчивости")
+        self.plot_stability_btn.clicked.connect(self.plot_stability_diagram)
+        layout.addWidget(self.plot_stability_btn)
+
+    # --- Метод для построения графика ---
+    def plot_stability_diagram(self):
+        self.stability_figure.clear()
+        ax = self.stability_figure.add_subplot(111)
+
+        params = self.get_current_parameters()
+        L = params['length']
+        delta_base = params['delta1']
+        multiplier_list = [1, 2, 3, 4, 6, 10]
+        delta1_values = [delta_base * m for m in multiplier_list]
+
+        rho = params['rho']
+        G = params['G']
+        Jr = params['Jr']
+        Jp = params['Jp']
+        lambda1 = np.sqrt(rho * G) * Jp / Jr
+        lambda2 = L * np.sqrt(rho / G)
+
+        re_sigma_values = []
+        for delta in delta1_values:
+            def im_sigma(omega):
+                p = 1j * omega
+                expr = np.sqrt(1 + delta * p)
+                coth_arg = lambda2 * p / expr
+                coth_arg = np.clip(coth_arg, -100, 100)
+                coth = (np.exp(2 * coth_arg) + 1) / (np.exp(2 * coth_arg) - 1)
+                sigma = -p - lambda1 * expr * coth
+                return sigma.imag
+
+            omega_cross = None
+            for bracket in [(500, 2000), (2000, 5000), (5000, 10000), (10000, 20000)]:
+                try:
+                    sol = root_scalar(im_sigma, bracket=bracket, method='brentq')
+                    if sol.converged:
+                        omega_cross = sol.root
+                        break
+                except:
+                    continue
+
+            if omega_cross is not None:
+                p_cross = 1j * omega_cross
+                expr = np.sqrt(1 + delta * p_cross)
+                coth_arg = lambda2 * p_cross / expr
+                coth_arg = np.clip(coth_arg, -100, 100)
+                coth = (np.exp(2 * coth_arg) + 1) / (np.exp(2 * coth_arg) - 1)
+                sigma = -p_cross - lambda1 * expr * coth
+                re_sigma_values.append(sigma.real)
+            else:
+                re_sigma_values.append(np.nan)
+
+        ax.plot(np.array(multiplier_list) * delta_base * 1e6, re_sigma_values, marker='o')
+        ax.set_xlabel('δ₁ (×10⁻⁶ с)')
+        ax.set_ylabel('Re(σ)')
+        ax.set_title(f'Диаграмма устойчивости при L = {L} м')
+        ax.grid(True)
+        self.stability_canvas.draw()
             
     def show_interactive(self):
         """Интерактивная визуализация с улучшенным масштабированием"""
