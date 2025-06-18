@@ -295,7 +295,6 @@ class BoreBarGUI(QMainWindow):
         self.torsional_figure.clear()
         ax = self.torsional_figure.add_subplot(111)
 
-        # 1) Получаем результаты
         result = self.model.calculate_torsional(params)
 
         # --- DEBUG PRINTS: проверяем данные перед построением ---
@@ -308,12 +307,10 @@ class BoreBarGUI(QMainWindow):
         if result['sigma_imag'].any():
             print(f"Im(σ) range: {min(result['sigma_imag']):.4e} … {max(result['sigma_imag']):.4e}")
 
-        # 2) Рисуем D-разбиение
         ax.plot(result['sigma_real'], result['sigma_imag'], 'b-', linewidth=1.5)
         ax.axhline(0, color='red', linestyle='--', linewidth=0.7)
         ax.axvline(0, color='red', linestyle='--', linewidth=0.7)
 
-        # 3) Автоматические оси
         ax.relim()
         ax.autoscale_view()
         ax.margins(x=0.05, y=0.05)
@@ -322,13 +319,11 @@ class BoreBarGUI(QMainWindow):
         print(f"Auto xlim: {ax.get_xlim()}")
         print(f"Auto ylim: {ax.get_ylim()}")
 
-        # 4) Оформление
         ax.set_title('Кривая D-разбиения для крутильных колебаний', fontsize=10)
         ax.set_xlabel('Re(σ)', fontsize=8)
         ax.set_ylabel('Im(σ)', fontsize=8)
         ax.grid(True, which='both', linestyle=':', alpha=0.7)
 
-        # 5) Точка пересечения с Im(σ)=0
         intersection = self.model.find_intersection(params)
         if intersection is not None:
             ax.plot(intersection['re_sigma'], 0, 'ro', markersize=8, label='Пересечение')
@@ -347,11 +342,9 @@ class BoreBarGUI(QMainWindow):
         self.longitudinal_figure.clear()
         ax = self.longitudinal_figure.add_subplot(111)
 
-        # 1) Получаем результаты
         result = self.model.calculate_longitudinal(params)
 
         if len(result['K1']) > 0:
-            # Переводим в читаемые единицы
             K1_MN   = result['K1']   / 1e6
             delta_k = result['delta'] / 1e3
 
@@ -361,11 +354,9 @@ class BoreBarGUI(QMainWindow):
             print(f"K₁ range (МН/м): {min(K1_MN):.4f} … {max(K1_MN):.4f}")
             print(f"δ  range (кН·с/м): {min(delta_k):.4f} … {max(delta_k):.4f}")
 
-            # 2) Рисуем граничную кривую
             ax.plot(K1_MN, delta_k, 'b-', linewidth=1.5)
             ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
 
-            # 3) Автоматические оси
             ax.relim()
             ax.autoscale_view()
             ax.margins(x=0.05, y=0.05)
@@ -374,7 +365,6 @@ class BoreBarGUI(QMainWindow):
             print(f"Auto xlim: {ax.get_xlim()}")
             print(f"Auto ylim: {ax.get_ylim()}")
 
-            # 4) Оформление
             ax.set_title('D-разбиение для продольных колебаний', fontsize=10)
             ax.set_xlabel('K₁, МН/м', fontsize=8)
             ax.set_ylabel('δ, кН·с/м', fontsize=8)
@@ -560,11 +550,11 @@ class BoreBarGUI(QMainWindow):
             length_slider.setSingleStep(1)
             length_slider.setTickInterval(1)
             length_slider.setTickPosition(QSlider.TicksBelow)
-            
+
             delta_slider = QSlider(Qt.Horizontal)
             delta_slider.setRange(1, 100)
             delta_slider.setValue(34)
-            
+
             # Инициализация графика
             line, = torsional_ax.plot([], [], 'b-', linewidth=1.5)
             torsional_ax.grid(True, which='both', linestyle=':', alpha=0.7)
@@ -720,7 +710,7 @@ class BoreBarGUI(QMainWindow):
             
             line_long, = longitudinal_ax.plot([], [], 'b-', linewidth=1.5)
             longitudinal_ax.grid(True)
-            longitudinal_ax.set_title('Продольные колебания (Колесо мыши - масштаб, ЛКМ - панорамирование)')
+            longitudinal_ax.set_title('Кривая D-разбиения для продольных колебаний')
             longitudinal_ax.set_xlabel('K₁, МН/м')
             longitudinal_ax.set_ylabel('δ, кН·с/м')
             
@@ -794,20 +784,33 @@ class BoreBarGUI(QMainWindow):
             def update_longitudinal():
                 mu = mu_slider.value() / 100
                 tau = tau_slider.value() * 1e-3
-                
+
                 params = self.get_current_parameters()
                 params['mu'] = mu
                 params['tau'] = tau
-                
+
                 result = self.model.calculate_longitudinal(params)
-                
+
                 if len(result['K1']) > 0:
-                    line_long.set_data(result['K1']/1e6, result['delta']/1e3)
+                    K1_MN = result['K1'] / 1e6  # МН/м
+                    delta_kNs_per_m = result['delta'] / 1e3  # кН·с/м
+
+                    line_long.set_data(K1_MN, delta_kNs_per_m)
+
+                    # --- Заголовок с параметрами и диапазонами ---
+                    longitudinal_ax.set_title(
+                        f'Продольные колебания: μ={mu:.2f}, τ={tau*1e3:.0f} мс\n'
+                        f'K₁ ∈ [{np.nanmin(K1_MN):.2f}, {np.nanmax(K1_MN):.2f}] МН/м, '
+                        f'δ ∈ [{np.nanmin(delta_kNs_per_m):.2f}, {np.nanmax(delta_kNs_per_m):.2f}] кН·с/м',
+                        fontsize=10
+                    )
+
                     longitudinal_canvas.draw()
                 else:
                     longitudinal_ax.clear()
+                    longitudinal_ax.set_title('Продольные колебания: нет данных для построения')
                     longitudinal_ax.text(0.5, 0.5, 'Нет данных для построения', 
-                                      ha='center', va='center')
+                                        ha='center', va='center', transform=longitudinal_ax.transAxes)
                     longitudinal_canvas.draw()
             
             longitudinal_canvas.mpl_connect('scroll_event', on_scroll_longitudinal)

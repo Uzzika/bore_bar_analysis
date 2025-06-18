@@ -27,10 +27,10 @@ class BoreBarModel:
             sigma = -p - lambda1 * expr * cth
 
         valid = (np.abs(sigma.real) < 1e6) & (np.abs(sigma.imag) < 1e6)
-        print(f"[DEBUG] λ₁ = {lambda1:.3e}, λ₂ = {lambda2:.3e}, δ₁ = {delta1:.3e}")
-        print(f"[DEBUG] Valid points: {np.sum(valid)} / {len(sigma)}")
-        print(f"[DEBUG] Re(σ) min/max: {np.min(sigma.real):.3e} / {np.max(sigma.real):.3e}")
-        print(f"[DEBUG] Im(σ) min/max: {np.min(sigma.imag):.3e} / {np.max(sigma.imag):.3e}")
+        # print(f"[DEBUG] λ₁ = {lambda1:.3e}, λ₂ = {lambda2:.3e}, δ₁ = {delta1:.3e}")
+        # print(f"[DEBUG] Valid points: {np.sum(valid)} / {len(sigma)}")
+        # print(f"[DEBUG] Re(σ) min/max: {np.min(sigma.real):.3e} / {np.max(sigma.real):.3e}")
+        # print(f"[DEBUG] Im(σ) min/max: {np.min(sigma.imag):.3e} / {np.max(sigma.imag):.3e}")
 
         return {
             'omega': omega[valid],
