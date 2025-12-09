@@ -90,6 +90,25 @@ class BoreBarGUI(QMainWindow):
         geometry_layout.addWidget(self.Jp_input)
         geometry_group.setLayout(geometry_layout)
         self.params_layout.addWidget(geometry_group)
+
+        transverse_group = QGroupBox("Параметры поперечных колебаний")
+        transverse_layout = QVBoxLayout()
+
+        self.R_input = self.create_parameter_input("Внешний радиус R (м)", 0.04, 0.001, 0.2)
+        self.r_input = self.create_parameter_input("Внутренний радиус r (м)", 0.035, 0.0, 0.2)
+        self.K_cut_input = self.create_parameter_input("Дин. жёсткость резания K (Н/м)", 6e5, 1e3, 1e8)
+        self.h_input = self.create_parameter_input("Коэф. внутр. трения h", 0.0, 0.0, 10.0)
+        self.beta_input = self.create_parameter_input("Коэф. демпфирования β", 0.3, 0.0, 10.0)
+
+        transverse_layout.addWidget(self.R_input)
+        transverse_layout.addWidget(self.r_input)
+        transverse_layout.addWidget(self.K_cut_input)
+        transverse_layout.addWidget(self.h_input)
+        transverse_layout.addWidget(self.beta_input)
+
+        transverse_group.setLayout(transverse_layout)
+        self.params_layout.addWidget(transverse_group)
+
         
         friction_group = QGroupBox("Параметры трения")
         friction_layout = QVBoxLayout()
@@ -154,14 +173,17 @@ class BoreBarGUI(QMainWindow):
     def setup_analysis_tabs(self):
         self.torsional_tab = QWidget()
         self.longitudinal_tab = QWidget()
+        self.transverse_tab = QWidget()
         self.stability_tab = QWidget()
         
         self.setup_torsional_tab()
         self.setup_longitudinal_tab()
+        self.setup_transverse_tab()
         self.setup_stability_tab()
         
         self.tabs.addTab(self.torsional_tab, "Крутильные колебания")
         self.tabs.addTab(self.longitudinal_tab, "Продольные колебания")
+        self.tabs.addTab(self.transverse_tab, "Поперечные колебания")
         self.tabs.addTab(self.stability_tab, "Диаграмма устойчивости")
         
     def setup_torsional_tab(self):
@@ -175,6 +197,12 @@ class BoreBarGUI(QMainWindow):
         self.longitudinal_figure = Figure()
         self.longitudinal_canvas = FigureCanvas(self.longitudinal_figure)
         layout.addWidget(self.longitudinal_canvas)
+    
+    def setup_transverse_tab(self):
+        layout = QVBoxLayout(self.transverse_tab)
+        self.transverse_figure = Figure()
+        self.transverse_canvas = FigureCanvas(self.transverse_figure)
+        layout.addWidget(self.transverse_canvas)
         
     def setup_control_buttons(self):
         buttons_layout = QHBoxLayout()
@@ -222,6 +250,12 @@ class BoreBarGUI(QMainWindow):
         self.tau_input.findChild(QDoubleSpinBox).setValue(60e-3)
         self.length_combo.setCurrentIndex(0)
         self.multiplier_combo.setCurrentIndex(0)
+        self.R_input.findChild(QDoubleSpinBox).setValue(0.04)
+        self.r_input.findChild(QDoubleSpinBox).setValue(0.035)
+        self.K_cut_input.findChild(QDoubleSpinBox).setValue(6e5)
+        self.h_input.findChild(QDoubleSpinBox).setValue(0.0)
+        self.beta_input.findChild(QDoubleSpinBox).setValue(0.3)
+
         
     def get_current_parameters(self):
         return {
@@ -235,7 +269,12 @@ class BoreBarGUI(QMainWindow):
             'mu': self.mu_input.findChild(QDoubleSpinBox).value(),
             'tau': self.tau_input.findChild(QDoubleSpinBox).value(),
             'length': float(self.length_combo.currentText()),
-            'multiplier': int(self.multiplier_combo.currentText())
+            'multiplier': int(self.multiplier_combo.currentText()),
+            'R': self.R_input.findChild(QDoubleSpinBox).value(),
+            'r': self.r_input.findChild(QDoubleSpinBox).value(),
+            'K_cut': self.K_cut_input.findChild(QDoubleSpinBox).value(),
+            'h': self.h_input.findChild(QDoubleSpinBox).value(),
+            'beta': self.beta_input.findChild(QDoubleSpinBox).value()
         }
     
     def save_parameters(self):
@@ -271,6 +310,11 @@ class BoreBarGUI(QMainWindow):
                 self.tau_input.findChild(QDoubleSpinBox).setValue(params.get('tau', 60e-3))
                 self.length_combo.setCurrentIndex(self.length_combo.findText(str(params.get('length', '2.5'))))
                 self.multiplier_combo.setCurrentIndex(self.multiplier_combo.findText(str(params.get('multiplier', '1'))))
+                self.R_input.findChild(QDoubleSpinBox).setValue(params.get('R', 0.04))
+                self.r_input.findChild(QDoubleSpinBox).setValue(params.get('r', 0.035))
+                self.K_cut_input.findChild(QDoubleSpinBox).setValue(params.get('K_cut', 6e5))
+                self.h_input.findChild(QDoubleSpinBox).setValue(params.get('h', 0.0))
+                self.beta_input.findChild(QDoubleSpinBox).setValue(params.get('beta', 0.3))
                 
                 self.status_bar.showMessage("Параметры успешно загружены", 3000)
             except Exception as e:
@@ -285,7 +329,8 @@ class BoreBarGUI(QMainWindow):
                 self.analyze_torsional(params)
             elif current_tab == 1:
                 self.analyze_longitudinal(params)
-                
+            elif current_tab == 2:
+                self.analyze_transverse(params)
             self.status_bar.showMessage("Анализ успешно завершен", 3000)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка анализа", f"Ошибка при выполнении анализа: {str(e)}")
@@ -297,7 +342,6 @@ class BoreBarGUI(QMainWindow):
 
         result = self.model.calculate_torsional(params)
 
-        # --- DEBUG PRINTS: проверяем данные перед построением ---
         print("=== Torsional analysis ===")
         print(f"Points count: {len(result['sigma_real'])}")
         print(f"L: {params['length']}")
@@ -315,7 +359,6 @@ class BoreBarGUI(QMainWindow):
         ax.autoscale_view()
         ax.margins(x=0.05, y=0.05)
 
-        # --- DEBUG PRINT: проверяем лимиты осей после autoscale ---
         print(f"Auto xlim: {ax.get_xlim()}")
         print(f"Auto ylim: {ax.get_ylim()}")
 
@@ -348,7 +391,6 @@ class BoreBarGUI(QMainWindow):
             K1_MN   = result['K1']   / 1e6
             delta_k = result['delta'] / 1e3
 
-            # --- DEBUG PRINTS: проверяем данные перед построением ---
             print("=== Longitudinal analysis ===")
             print(f"Points count: {len(K1_MN)}")
             print(f"K₁ range (МН/м): {min(K1_MN):.4f} … {max(K1_MN):.4f}")
@@ -361,7 +403,6 @@ class BoreBarGUI(QMainWindow):
             ax.autoscale_view()
             ax.margins(x=0.05, y=0.05)
 
-            # --- DEBUG PRINT: проверяем лимиты осей после autoscale ---
             print(f"Auto xlim: {ax.get_xlim()}")
             print(f"Auto ylim: {ax.get_ylim()}")
 
@@ -374,6 +415,34 @@ class BoreBarGUI(QMainWindow):
                     ha='center', va='center', transform=ax.transAxes)
 
         self.longitudinal_canvas.draw()
+
+    def analyze_transverse(self, params):
+        """Построение кривой D-разбиения для поперечных колебаний (годограф W(p))."""
+        self.transverse_figure.clear()
+        ax = self.transverse_figure.add_subplot(111)
+
+        result = self.model.calculate_transverse(params)
+
+        if len(result['W_real']) > 0:
+            ax.plot(result['W_real'], result['W_imag'], 'b-', linewidth=1.5)
+            ax.axhline(0, color='red', linestyle='--', linewidth=0.7)
+            ax.axvline(0, color='red', linestyle='--', linewidth=0.7)
+
+            ax.set_title('Кривая D-разбиения для поперечных колебаний', fontsize=10)
+            ax.set_xlabel('Re(W)', fontsize=8)
+            ax.set_ylabel('Im(W)', fontsize=8)
+            ax.grid(True, which='both', linestyle=':', alpha=0.7)
+
+            ax.relim()
+            ax.autoscale_view()
+            ax.margins(x=0.05, y=0.05)
+        else:
+            ax.text(0.5, 0.5,
+                    'Нет данных для построения графика\nПроверьте параметры',
+                    ha='center', va='center', transform=ax.transAxes)
+
+        self.transverse_canvas.draw()
+
 
     def export_results(self):
         formats = ["JSON (*.json)", "CSV (*.csv)"]
@@ -457,7 +526,6 @@ class BoreBarGUI(QMainWindow):
         else:
             return str(data)
         
-    # --- Метод для настройки вкладки ---
     def setup_stability_tab(self):
         layout = QVBoxLayout(self.stability_tab)
         self.stability_figure = Figure()
@@ -468,7 +536,6 @@ class BoreBarGUI(QMainWindow):
         self.plot_stability_btn.clicked.connect(self.plot_stability_diagram)
         layout.addWidget(self.plot_stability_btn)
 
-    # --- Метод для построения графика ---
     def plot_stability_diagram(self):
         self.stability_figure.clear()
         ax = self.stability_figure.add_subplot(111)
@@ -699,6 +766,39 @@ class BoreBarGUI(QMainWindow):
             longitudinal_fig = Figure(figsize=(10, 6))
             longitudinal_canvas = FigureCanvas(longitudinal_fig)
             longitudinal_ax = longitudinal_fig.add_subplot(111)
+
+            # --- Вкладка поперечных колебаний ---
+            transverse_tab = QWidget()
+            transverse_layout = QVBoxLayout(transverse_tab)
+            transverse_fig = Figure(figsize=(10, 6))
+            transverse_canvas = FigureCanvas(transverse_fig)
+            transverse_ax = transverse_fig.add_subplot(111)
+
+            # Слайдеры для поперечных колебаний
+            trans_length_slider = QSlider(Qt.Horizontal)
+            trans_length_slider.setRange(25, 60)     # 2.5 ... 6.0 м (умножим на 0.1)
+            trans_length_slider.setValue(25)
+            trans_length_slider.setTickInterval(5)
+            trans_length_slider.setTickPosition(QSlider.TicksBelow)
+
+            trans_K_slider = QSlider(Qt.Horizontal)
+            trans_K_slider.setRange(1, 10)          # 1e5 .. 1e6 Н/м
+            trans_K_slider.setValue(6)
+
+            trans_mu_slider = QSlider(Qt.Horizontal)
+            trans_mu_slider.setRange(1, 30)         # 0.01 .. 0.30
+            trans_mu_slider.setValue(10)
+
+            trans_tau_slider = QSlider(Qt.Horizontal)
+            trans_tau_slider.setRange(10, 200)      # 0.01 .. 0.20 c
+            trans_tau_slider.setValue(60)
+
+            # Линия графика
+            trans_line, = transverse_ax.plot([], [], 'b-', linewidth=1.5)
+            transverse_ax.grid(True, which='both', linestyle=':', alpha=0.7)
+            transverse_ax.set_title('Поперечные колебания: D-разбиение')
+            transverse_ax.set_xlabel('Re(W)')
+            transverse_ax.set_ylabel('Im(W)')
             
             mu_slider = QSlider(Qt.Horizontal)
             mu_slider.setRange(1, 50)
@@ -722,6 +822,60 @@ class BoreBarGUI(QMainWindow):
             longitudinal_current_xlim = list(longitudinal_original_xlim)
             longitudinal_current_ylim = list(longitudinal_original_ylim)
             longitudinal_press = None
+
+            def update_transverse():
+                """Обновление кривой D-разбиения для поперечных колебаний."""
+                # переводим значения слайдеров в физические
+                L = trans_length_slider.value() / 10.0          # 2.5..6.0 м
+                K_cut = trans_K_slider.value() * 1e5            # 1e5..1e6 Н/м
+                mu = trans_mu_slider.value() / 100.0            # 0.01..0.30
+                tau = trans_tau_slider.value() / 1000.0         # 0.01..0.20 c
+
+                # Берём остальные параметры из текущей формы
+                params = self.get_current_parameters()
+                params['length'] = L
+                params['K_cut'] = K_cut
+                params['mu'] = mu
+                params['tau'] = tau
+
+                try:
+                    result = self.model.calculate_transverse(params)
+
+                    if len(result['W_real']) > 0:
+                        trans_line.set_data(result['W_real'], result['W_imag'])
+
+                        # Автомасштаб
+                        transverse_ax.relim()
+                        transverse_ax.autoscale_view()
+                        transverse_ax.margins(x=0.05, y=0.05)
+
+                        transverse_ax.set_title(
+                            f'Поперечные колебания: L={L:.2f} м, '
+                            f'K={K_cut/1e5:.1f}·10⁵ Н/м, '
+                            f'μ={mu:.2f}, τ={tau*1e3:.0f} мс',
+                            fontsize=10
+                        )
+                    else:
+                        transverse_ax.clear()
+                        transverse_ax.set_title('Поперечные колебания: нет данных')
+                        transverse_ax.text(
+                            0.5, 0.5,
+                            'Нет данных для построения\nПроверьте параметры',
+                            ha='center', va='center',
+                            transform=transverse_ax.transAxes
+                        )
+
+                    transverse_canvas.draw_idle()
+                except Exception as e:
+                    print(f"[ERROR] transverse update: {e}")
+                    transverse_ax.clear()
+                    transverse_ax.text(
+                        0.5, 0.5,
+                        'Ошибка при вычислениях',
+                        ha='center', va='center',
+                        transform=transverse_ax.transAxes
+                    )
+                    transverse_canvas.draw_idle()
             
             def on_scroll_longitudinal(event):
                 if event.inaxes != longitudinal_ax:
@@ -820,6 +974,21 @@ class BoreBarGUI(QMainWindow):
             
             mu_slider.valueChanged.connect(update_longitudinal)
             tau_slider.valueChanged.connect(update_longitudinal)
+
+            trans_length_slider.valueChanged.connect(update_transverse)
+            trans_K_slider.valueChanged.connect(update_transverse)
+            trans_mu_slider.valueChanged.connect(update_transverse)
+            trans_tau_slider.valueChanged.connect(update_transverse)
+
+            transverse_layout.addWidget(transverse_canvas)
+            transverse_layout.addWidget(QLabel("Длина борштанги L (м, ×0.1):"))
+            transverse_layout.addWidget(trans_length_slider)
+            transverse_layout.addWidget(QLabel("Дин. жёсткость резания K (×10⁵ Н/м):"))
+            transverse_layout.addWidget(trans_K_slider)
+            transverse_layout.addWidget(QLabel("Коэффициент μ (×0.01):"))
+            transverse_layout.addWidget(trans_mu_slider)
+            transverse_layout.addWidget(QLabel("Время запаздывания τ (мс):"))
+            transverse_layout.addWidget(trans_tau_slider)
             
             longitudinal_layout.addWidget(longitudinal_canvas)
             longitudinal_layout.addWidget(QLabel("Коэффициент трения μ (x0.01):"))
@@ -840,7 +1009,8 @@ class BoreBarGUI(QMainWindow):
             
             tabs.addTab(torsional_tab, "Крутильные колебания")
             tabs.addTab(longitudinal_tab, "Продольные колебания")
-            
+            tabs.addTab(transverse_tab, "Поперечные колебания")
+
             layout.addWidget(tabs)
             layout.addLayout(control_buttons)
             
@@ -849,6 +1019,7 @@ class BoreBarGUI(QMainWindow):
             layout.addWidget(close_btn)
             
             update_torsional()
+            update_transverse()
             update_longitudinal()
             
             dialog.exec_()

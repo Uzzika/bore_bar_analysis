@@ -152,3 +152,99 @@ class BoreBarModel:
             }
         except Exception:
             return None
+    
+    @staticmethod
+    def calculate_transverse(params):
+        """
+        Расчет поперечных колебаний в модальной аппроксимации.
+        Реализует формулу вида:
+            W(p) = phi(L)^2 * K_cut * (1 - mu * exp(-p*tau)) / (alpha*p**2 + beta*p + gamma)
+        и строит годограф W(p) при p = i*omega.
+        """
+        E = params['E']
+        rho = params['rho']
+        L = params['length']
+        mu = params['mu']
+        tau = params['tau']
+
+        # Доп. параметры для поперечных колебаний
+        R = params.get('R', 0.04)           # внешний радиус, м
+        r = params.get('r', 0.035)          # внутренний радиус, м
+        K_cut = params.get('K_cut', 6e5)    # динамическая жесткость резания, Н/м
+        h = params.get('h', 0.0)            # коэффициент внутреннего трения (пока не используем явно)
+        beta = params.get('beta', 0.3)      # коэффициент вязкого демпфирования β
+
+        # Геометрия (как в приложении к поперечным колебаниям) :contentReference[oaicite:3]{index=3}
+        S = np.pi * (R**2 - r**2)          # площадь
+        m = rho * S                        # погонная масса
+        J = np.pi * (R**4 - r**4) / 4.0    # изгибной момент инерции
+
+        # Первая собственная форма консольного стержня
+        # классическая формула через гиперболические и тригонометрические функции
+        alpha1_const = 1.875104068711961  # первый корень для консольной балки
+        lam = alpha1_const / L
+
+        def phi(x):
+            x = np.asarray(x)
+            cosh_lx = np.cosh(lam * x)
+            cos_lx = np.cos(lam * x)
+            sinh_lx = np.sinh(lam * x)
+            sin_lx = np.sin(lam * x)
+
+            denom = np.sinh(lam * L) + np.sin(lam * L)
+            num = np.cosh(lam * L) + np.cos(lam * L)
+            A = num / denom
+            return cosh_lx - cos_lx - A * (sinh_lx - sin_lx)
+
+        def phi_pp(x):
+            x = np.asarray(x)
+            cosh_lx = np.cosh(lam * x)
+            cos_lx = np.cos(lam * x)
+            sinh_lx = np.sinh(lam * x)
+            sin_lx = np.sin(lam * x)
+
+            denom = np.sinh(lam * L) + np.sin(lam * L)
+            num = np.cosh(lam * L) + np.cos(lam * L)
+            A = num / denom
+            # phi''(x) — вторая производная φ(x)
+            return lam**2 * (cosh_lx + cos_lx - A * (sinh_lx + sin_lx))
+
+        # Численная оценка коэффициентов модального уравнения: alpha, gamma
+        x_grid = np.linspace(0, L, 1000)
+        phi_vals = phi(x_grid)
+        phi_pp_vals = phi_pp(x_grid)
+
+        alpha = m * np.trapz(phi_vals**2, x_grid)
+        gamma = E * J * np.trapz(phi_pp_vals**2, x_grid)
+
+        # beta у нас берется из параметров (как в Maple beta1 := 0.3) :contentReference[oaicite:4]{index=4}
+
+        # Диапазон частот, как в примере Maple: 0..220 рад/с
+        omega = np.linspace(0.1, 220.0, 2000)
+        p = 1j * omega
+
+        phi_L = phi(L)
+
+        with np.errstate(all='ignore'):
+            numerator = (phi_L**2) * K_cut * (1 - mu * np.exp(-p * tau))
+            denom = alpha * p**2 + beta * p + gamma
+            W = numerator / denom
+
+        # Фильтрация заведомо "взлетевших" значений
+        mask = np.isfinite(W) & (np.abs(W.real) < 1e6) & (np.abs(W.imag) < 1e6)
+        W_valid = W[mask]
+        omega_valid = omega[mask]
+
+        return {
+            'omega': omega_valid,
+            'W_real': W_valid.real,
+            'W_imag': W_valid.imag,
+            'alpha': alpha,
+            'gamma': gamma,
+            'beta': beta,
+            'phi_L': phi_L,
+            'K_cut': K_cut,
+            'R': R,
+            'r': r
+        }
+
