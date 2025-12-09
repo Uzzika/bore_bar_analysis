@@ -1,15 +1,14 @@
 """
 borebar_gui.py
 
-Упрощённый и аккуратно оформленный графический интерфейс
-для анализа колебаний борштанги:
+Графический интерфейс для анализа колебаний борштанги:
 
 - крутильные колебания;
 - продольные колебания;
 - поперечные колебания;
 - диаграмма устойчивости по δ₁.
 
-Сделан максимально понятным для чтения и проверки в рамках курсовой.
+Код оформлен максимально аккуратно и читаемо для проверки курсовой работы.
 """
 
 import sys
@@ -36,6 +35,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QDialog,
     QSlider,
+    QAction,
 )
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
@@ -44,6 +44,25 @@ from matplotlib.backends.backend_qt5agg import (
 from matplotlib.figure import Figure
 
 from borebar_model import BoreBarModel
+
+class SciDoubleSpinBox(QDoubleSpinBox):
+    """
+    QDoubleSpinBox с выводом числа в научной нотации (a.bcd·10^n).
+    Формат зависит от self.decimals().
+    """
+
+    def textFromValue(self, value: float) -> str:  # отображение -> строка
+        # decimals задаём через setDecimals, здесь просто используем
+        prec = self.decimals()
+        return f"{value:.{prec}e}"
+
+    def valueFromText(self, text: str) -> float:   # ввод строки -> число
+        # позволяем использовать запятую как десятичный разделитель
+        text = text.replace(",", ".")
+        try:
+            return float(text)
+        except ValueError:
+            return 0.0
 
 
 class BoreBarGUI(QMainWindow):
@@ -58,11 +77,12 @@ class BoreBarGUI(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Анализ колебаний борштанги")
-        self.setGeometry(100, 100, 1600, 900)
+        self.resize(1600, 900)
 
         self.model = BoreBarModel()
 
         self._init_ui()
+        self._create_menubar()
         self._init_parameters()
 
     # ----------------------------------------------------------------------
@@ -90,6 +110,49 @@ class BoreBarGUI(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
+        # Небольшие косметические стили
+        self._apply_styles()
+
+    def _create_menubar(self):
+        """Создание меню (Справка → Инструкция / О программе)."""
+        menubar = self.menuBar()
+        help_menu = menubar.addMenu("Справка")
+
+        guide_action = QAction("Инструкция пользователю", self)
+        guide_action.triggered.connect(self._show_user_guide)
+        help_menu.addAction(guide_action)
+
+        about_action = QAction("О программе", self)
+        about_action.triggered.connect(self._show_about_dialog)
+        help_menu.addAction(about_action)
+
+    def _apply_styles(self):
+        """Небольшие косметические правки стиля."""
+        self.setStyleSheet(
+            """
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #AAAAAA;
+                border-radius: 4px;
+                margin-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px 0 4px;
+            }
+            QLabel {
+                font-size: 10pt;
+            }
+            QPushButton {
+                padding: 4px 10px;
+            }
+            QStatusBar {
+                font-size: 9pt;
+            }
+            """
+        )
+
     # ----------------------------------------------------------------------
     # Левая панель: параметры
     # ----------------------------------------------------------------------
@@ -106,11 +169,12 @@ class BoreBarGUI(QMainWindow):
         self._create_params_buttons()
         self._create_intersection_panel()
 
+        self.params_layout.addStretch(1)
+
     def _create_material_group(self):
         group = QGroupBox("Материальные свойства")
         layout = QVBoxLayout(group)
 
-        # Все спинбоксы сохраняем как self.<имя>_spin для удобного доступа
         layout.addWidget(
             self._create_labeled_spinbox(
                 "Плотность ρ (кг/м³):",
@@ -118,6 +182,8 @@ class BoreBarGUI(QMainWindow):
                 default=7800,
                 minimum=1000,
                 maximum=20000,
+                step=100,
+                decimals=0,
             )
         )
         layout.addWidget(
@@ -127,6 +193,8 @@ class BoreBarGUI(QMainWindow):
                 default=8e10,
                 minimum=1e9,
                 maximum=1e12,
+                step=1e9,
+                decimals=0,
             )
         )
         layout.addWidget(
@@ -136,6 +204,8 @@ class BoreBarGUI(QMainWindow):
                 default=200e9,
                 minimum=1e9,
                 maximum=1e12,
+                step=1e9,
+                decimals=0,
             )
         )
 
@@ -166,6 +236,8 @@ class BoreBarGUI(QMainWindow):
                 default=2e-4,
                 minimum=1e-6,
                 maximum=1e-2,
+                step=1e-5,
+                decimals=6,
             )
         )
         layout.addWidget(
@@ -175,6 +247,8 @@ class BoreBarGUI(QMainWindow):
                 default=2.57e-2,
                 minimum=1e-5,
                 maximum=1,
+                step=1e-3,
+                decimals=5,
             )
         )
         layout.addWidget(
@@ -184,6 +258,8 @@ class BoreBarGUI(QMainWindow):
                 default=1.9e-5,
                 minimum=1e-8,
                 maximum=1e-2,
+                step=1e-7,
+                decimals=7,
             )
         )
 
@@ -200,6 +276,8 @@ class BoreBarGUI(QMainWindow):
                 default=0.04,
                 minimum=0.001,
                 maximum=0.2,
+                step=0.001,
+                decimals=4,
             )
         )
         layout.addWidget(
@@ -209,6 +287,8 @@ class BoreBarGUI(QMainWindow):
                 default=0.035,
                 minimum=0.0,
                 maximum=0.2,
+                step=0.001,
+                decimals=4,
             )
         )
         layout.addWidget(
@@ -218,6 +298,8 @@ class BoreBarGUI(QMainWindow):
                 default=6e5,
                 minimum=1e3,
                 maximum=1e8,
+                step=1e4,
+                decimals=0,
             )
         )
         layout.addWidget(
@@ -227,9 +309,10 @@ class BoreBarGUI(QMainWindow):
                 default=0.3,
                 minimum=0.0,
                 maximum=10.0,
+                step=0.05,
+                decimals=3,
             )
         )
-        # h пока не используется в модели, но оставляем в интерфейсе
         layout.addWidget(
             self._create_labeled_spinbox(
                 "Коэф. внутр. трения h:",
@@ -237,6 +320,8 @@ class BoreBarGUI(QMainWindow):
                 default=0.0,
                 minimum=0.0,
                 maximum=10.0,
+                step=0.05,
+                decimals=3,
             )
         )
 
@@ -246,7 +331,6 @@ class BoreBarGUI(QMainWindow):
         group = QGroupBox("Параметры трения и запаздывания")
         layout = QVBoxLayout(group)
 
-        # Крутильное внутреннее трение δ₁ и множитель
         layout.addWidget(
             self._create_labeled_spinbox(
                 "Базовый коэф. δ₁ (с):",
@@ -254,6 +338,8 @@ class BoreBarGUI(QMainWindow):
                 default=3.44e-6,
                 minimum=1e-8,
                 maximum=1e-4,
+                step=1e-7,
+                decimals=8,
             )
         )
 
@@ -267,7 +353,6 @@ class BoreBarGUI(QMainWindow):
         mult_layout.addWidget(self.multiplier_combo)
         layout.addWidget(mult_row)
 
-        # Параметры μ и τ для запаздывания (продольные и поперечные)
         layout.addWidget(
             self._create_labeled_spinbox(
                 "Коэф. μ (безразм.):",
@@ -275,6 +360,8 @@ class BoreBarGUI(QMainWindow):
                 default=0.1,
                 minimum=0.0,
                 maximum=1.0,
+                step=0.01,
+                decimals=3,
             )
         )
         layout.addWidget(
@@ -284,6 +371,8 @@ class BoreBarGUI(QMainWindow):
                 default=60e-3,
                 minimum=1e-3,
                 maximum=1.0,
+                step=1e-3,
+                decimals=4,
             )
         )
 
@@ -317,6 +406,27 @@ class BoreBarGUI(QMainWindow):
 
         layout.addWidget(self.intersection_label)
         self.params_layout.addWidget(group)
+        
+        # Блок для продольных колебаний
+        long_group = QGroupBox("Характеристики продольных колебаний")
+        long_layout = QVBoxLayout(long_group)
+
+        self.longitudinal_info_label = QLabel("Анализ не выполнен.")
+        self.longitudinal_info_label.setWordWrap(True)
+
+        long_layout.addWidget(self.longitudinal_info_label)
+        self.params_layout.addWidget(long_group)
+
+        # Блок для поперечных колебаний
+        trans_group = QGroupBox("Характеристики поперечных колебаний")
+        trans_layout = QVBoxLayout(trans_group)
+
+        self.transverse_info_label = QLabel("Анализ не выполнен.")
+        self.transverse_info_label.setWordWrap(True)
+
+        trans_layout.addWidget(self.transverse_info_label)
+        self.params_layout.addWidget(trans_group)
+
 
     # ----------------------------------------------------------------------
     # Вспомогательная функция создания пары (Label + SpinBox)
@@ -342,7 +452,7 @@ class BoreBarGUI(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
 
         label = QLabel(label_text)
-        spin = QDoubleSpinBox()
+        spin = SciDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setValue(default)
         spin.setDecimals(decimals)
@@ -365,7 +475,6 @@ class BoreBarGUI(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # Вкладки с графиками
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, stretch=1)
 
@@ -374,7 +483,6 @@ class BoreBarGUI(QMainWindow):
         self._create_transverse_tab()
         self._create_stability_tab()
 
-        # Кнопки под вкладками
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(8)
 
@@ -388,7 +496,6 @@ class BoreBarGUI(QMainWindow):
 
         layout.addLayout(buttons_row)
 
-        # Привязка сигналов
         self.analyze_btn.clicked.connect(self._run_analysis)
         self.export_btn.clicked.connect(self._export_results)
         self.interactive_btn.clicked.connect(self._show_interactive_dialog)
@@ -399,8 +506,11 @@ class BoreBarGUI(QMainWindow):
 
         self.torsional_figure = Figure()
         self.torsional_canvas = FigureCanvas(self.torsional_figure)
+        self.torsional_toolbar = NavigationToolbar(self.torsional_canvas, self.torsional_tab)
 
+        layout.addWidget(self.torsional_toolbar)
         layout.addWidget(self.torsional_canvas)
+
         self.tabs.addTab(self.torsional_tab, "Крутильные")
 
     def _create_longitudinal_tab(self):
@@ -409,8 +519,11 @@ class BoreBarGUI(QMainWindow):
 
         self.longitudinal_figure = Figure()
         self.longitudinal_canvas = FigureCanvas(self.longitudinal_figure)
+        self.longitudinal_toolbar = NavigationToolbar(self.longitudinal_canvas, self.longitudinal_tab)
 
+        layout.addWidget(self.longitudinal_toolbar)
         layout.addWidget(self.longitudinal_canvas)
+
         self.tabs.addTab(self.longitudinal_tab, "Продольные")
 
     def _create_transverse_tab(self):
@@ -419,8 +532,11 @@ class BoreBarGUI(QMainWindow):
 
         self.transverse_figure = Figure()
         self.transverse_canvas = FigureCanvas(self.transverse_figure)
+        self.transverse_toolbar = NavigationToolbar(self.transverse_canvas, self.transverse_tab)
 
+        layout.addWidget(self.transverse_toolbar)
         layout.addWidget(self.transverse_canvas)
+
         self.tabs.addTab(self.transverse_tab, "Поперечные")
 
     def _create_stability_tab(self):
@@ -429,7 +545,9 @@ class BoreBarGUI(QMainWindow):
 
         self.stability_figure = Figure()
         self.stability_canvas = FigureCanvas(self.stability_figure)
+        self.stability_toolbar = NavigationToolbar(self.stability_canvas, self.stability_tab)
 
+        layout.addWidget(self.stability_toolbar)
         layout.addWidget(self.stability_canvas)
 
         self.plot_stability_btn = QPushButton("Построить диаграмму устойчивости")
@@ -466,6 +584,9 @@ class BoreBarGUI(QMainWindow):
         self.multiplier_combo.setCurrentIndex(0)
 
         self.intersection_label.setText("Пересечение не вычислено.")
+        self.longitudinal_info_label.setText("Анализ не выполнен.")
+        self.transverse_info_label.setText("Анализ не выполнен.")
+
 
     def _get_current_parameters(self) -> dict:
         """Собрать все параметры в один словарь для передачи в модель."""
@@ -515,7 +636,6 @@ class BoreBarGUI(QMainWindow):
             with open(filename, "r", encoding="utf-8") as f:
                 params = json.load(f)
 
-            # Подставляем значения, если они есть, иначе остаются прежние
             self.rho_spin.setValue(params.get("rho", self.rho_spin.value()))
             self.G_spin.setValue(params.get("G", self.G_spin.value()))
             self.E_spin.setValue(params.get("E", self.E_spin.value()))
@@ -534,7 +654,6 @@ class BoreBarGUI(QMainWindow):
             self.mu_spin.setValue(params.get("mu", self.mu_spin.value()))
             self.tau_spin.setValue(params.get("tau", self.tau_spin.value()))
 
-            # Длина и множитель — строки
             length_str = str(params.get("length", float(self.length_combo.currentText())))
             idx_len = self.length_combo.findText(length_str)
             if idx_len >= 0:
@@ -595,7 +714,7 @@ class BoreBarGUI(QMainWindow):
                 transform=ax.transAxes,
             )
         else:
-            ax.plot(result["sigma_real"], result["sigma_imag"], "b-", linewidth=1.5)
+            ax.plot(result["sigma_real"], result["sigma_imag"], color="#1f77b4", linewidth=1.5)
             ax.axhline(0, color="red", linestyle="--", linewidth=0.7)
             ax.axvline(0, color="red", linestyle="--", linewidth=0.7)
 
@@ -604,13 +723,13 @@ class BoreBarGUI(QMainWindow):
             ax.set_ylabel("Im(σ)")
             ax.grid(True, linestyle=":", alpha=0.7)
 
-            # Точка пересечения Im σ = 0
             intersection = self.model.find_intersection(params)
             if intersection is not None:
                 ax.plot(
                     intersection["re_sigma"],
                     0,
-                    "ro",
+                    "o",
+                    color="#d62728",
                     markersize=8,
                     label="Пересечение Im(σ)=0",
                 )
@@ -627,6 +746,7 @@ class BoreBarGUI(QMainWindow):
                     "(в выбранном диапазоне частот)."
                 )
 
+        self.torsional_figure.tight_layout()
         self.torsional_canvas.draw()
 
     # ----------------------------------------------------------------------
@@ -649,19 +769,32 @@ class BoreBarGUI(QMainWindow):
                 va="center",
                 transform=ax.transAxes,
             )
+            self.longitudinal_info_label.setText("Анализ не выполнен (нет данных).")
         else:
-            # Переводим в удобные единицы
-            K1_MN = result["K1"] / 1e6        # МН/м
-            delta_kNs = result["delta"] / 1e3  # кН·с/м
+            K1_MN = result["K1"] / 1e6
+            delta_kNs = result["delta"] / 1e3
 
-            ax.plot(K1_MN, delta_kNs, "b-", linewidth=1.5)
+            ax.plot(K1_MN, delta_kNs, color="#2ca02c", linewidth=1.5)
             ax.axhline(0, color="black", linestyle="--", linewidth=0.7)
 
             ax.set_title("Продольные колебания: кривая D-разбиения K₁–δ")
             ax.set_xlabel("K₁, МН/м")
             ax.set_ylabel("δ, кН·с/м")
             ax.grid(True, linestyle=":", alpha=0.7)
+            # Обновляем текстовый блок с характеристиками
+            K1_0 = result.get("K1_0")
+            delta_0 = result.get("delta_0")
+            omega_main = result.get("omega_main")
 
+            self.longitudinal_info_label.setText(
+                f"Основная частота ω₁ ≈ {omega_main:.2f} рад/с\n"
+                f"Пределы при ω → 0:\n"
+                f"K₁(0) ≈ {K1_0:.2e} Н/м\n"
+                f"δ(0) ≈ {delta_0:.2e} Н·с/м"
+            )
+
+
+        self.longitudinal_figure.tight_layout()
         self.longitudinal_canvas.draw()
 
     # ----------------------------------------------------------------------
@@ -684,8 +817,9 @@ class BoreBarGUI(QMainWindow):
                 va="center",
                 transform=ax.transAxes,
             )
+            self.transverse_info_label.setText("Анализ не выполнен (нет данных).")
         else:
-            ax.plot(result["W_real"], result["W_imag"], "b-", linewidth=1.5)
+            ax.plot(result["W_real"], result["W_imag"], color="#9467bd", linewidth=1.5)
             ax.axhline(0, color="red", linestyle="--", linewidth=0.7)
             ax.axvline(0, color="red", linestyle="--", linewidth=0.7)
 
@@ -693,7 +827,20 @@ class BoreBarGUI(QMainWindow):
             ax.set_xlabel("Re(W)")
             ax.set_ylabel("Im(W)")
             ax.grid(True, linestyle=":", alpha=0.7)
+            # Обновляем текстовый блок с характеристиками
+            W_complex = result["W_real"] + 1j * result["W_imag"]
+            absW = np.abs(W_complex)
+            idx_max = int(np.argmax(absW))
+            omega_peak = result["omega"][idx_max]
+            W_peak = absW[idx_max]
 
+            self.transverse_info_label.setText(
+                "Максимальное значение |W(p)| в диапазоне:\n"
+                f"|W|max ≈ {W_peak:.3e}\n"
+                f"при ω ≈ {omega_peak:.2f} рад/с"
+            )
+
+        self.transverse_figure.tight_layout()
         self.transverse_canvas.draw()
 
     # ----------------------------------------------------------------------
@@ -720,14 +867,14 @@ class BoreBarGUI(QMainWindow):
             params["multiplier"] = m
 
             intersection = self.model.find_intersection(params)
-            delta_values.append(base_delta1 * m * 1e6)  # Перевод δ₁ в ×10⁻⁶ с
+            delta_values.append(base_delta1 * m * 1e6)
 
             if intersection is not None:
                 re_sigma_values.append(intersection["re_sigma"])
             else:
                 re_sigma_values.append(np.nan)
 
-        ax.plot(delta_values, re_sigma_values, "o-", linewidth=1.5)
+        ax.plot(delta_values, re_sigma_values, "o-", color="#ff7f0e", linewidth=1.5)
         ax.set_xlabel("δ₁ (×10⁻⁶ с)")
         ax.set_ylabel("Re(σ(ω*))")
         ax.set_title(
@@ -736,6 +883,7 @@ class BoreBarGUI(QMainWindow):
         )
         ax.grid(True, linestyle=":", alpha=0.7)
 
+        self.stability_figure.tight_layout()
         self.stability_canvas.draw()
 
     # ----------------------------------------------------------------------
@@ -762,7 +910,6 @@ class BoreBarGUI(QMainWindow):
         file_format = "json" if selected_filter.startswith("JSON") else "csv"
         params = self._get_current_parameters()
 
-        # Считаем результаты для экспорта
         torsional = self.model.calculate_torsional(params)
         longitudinal = self.model.calculate_longitudinal(params)
 
@@ -787,30 +934,31 @@ class BoreBarGUI(QMainWindow):
             else:
                 with open(filename, "w", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)
-                    # Параметры
-                    writer.writerow(["# Параметры"])
+                    writer.writerow(["# Параметры системы"])
+                    writer.writerow(["имя", "значение"])
+
                     for key, value in params.items():
-                        writer.writerow([key, value])
+                        writer.writerow([key, f"{value:.6g}"])
 
                     writer.writerow([])
                     writer.writerow(["# Крутильные колебания"])
-                    writer.writerow(["omega", "Re(sigma)", "Im(sigma)"])
+                    writer.writerow(["omega, рад/с", "Re(sigma)", "Im(sigma)"])
                     for w, sr, si in zip(
                         torsional["omega"],
                         torsional["sigma_real"],
                         torsional["sigma_imag"],
                     ):
-                        writer.writerow([w, sr, si])
+                        writer.writerow([f"{w:.6g}", f"{sr:.6g}", f"{si:.6g}"])
 
                     writer.writerow([])
                     writer.writerow(["# Продольные колебания"])
-                    writer.writerow(["omega", "K1", "delta"])
+                    writer.writerow(["omega, рад/с", "K1, Н/м", "delta, Н·с/м"])
                     for w, k1, dlt in zip(
                         longitudinal["omega"],
                         longitudinal["K1"],
                         longitudinal["delta"],
                     ):
-                        writer.writerow([w, k1, dlt])
+                        writer.writerow([f"{w:.6g}", f"{k1:.6g}", f"{dlt:.6g}"])
 
             self.status_bar.showMessage(f"Результаты экспортированы в {filename}", 5000)
             QMessageBox.information(self, "Экспорт завершён", "Результаты успешно сохранены.")
@@ -823,11 +971,7 @@ class BoreBarGUI(QMainWindow):
     # ----------------------------------------------------------------------
 
     def _show_interactive_dialog(self):
-        """
-        Небольшое диалоговое окно с вкладками и слайдерами
-        для интерактивного изменения ключевых параметров
-        и мгновенного обновления графиков.
-        """
+        """Диалог с интерактивными слайдерами по основным параметрам."""
         try:
             dialog = QDialog(self)
             dialog.setWindowTitle("Интерактивный режим")
@@ -837,7 +981,7 @@ class BoreBarGUI(QMainWindow):
             tabs = QTabWidget()
             layout.addWidget(tabs)
 
-            # --- Крутильные колебания ---
+            # --- Крутильные ---
             tors_tab = QWidget()
             tors_layout = QVBoxLayout(tors_tab)
 
@@ -845,16 +989,14 @@ class BoreBarGUI(QMainWindow):
             tors_canvas = FigureCanvas(tors_fig)
             tors_toolbar = NavigationToolbar(tors_canvas, tors_tab)
 
-            tors_ax = tors_fig.add_subplot(111)
             tors_layout.addWidget(tors_toolbar)
             tors_layout.addWidget(tors_canvas)
 
-            # Слайдер длины и δ₁
             tors_controls = QHBoxLayout()
             tors_controls.setSpacing(10)
 
             length_slider = QSlider(Qt.Horizontal)
-            length_slider.setRange(25, 60)  # 2.5 .. 6.0 м (делим на 10)
+            length_slider.setRange(25, 60)  # 2.5 .. 6.0 м
             length_slider.setValue(int(self.length_combo.currentText().replace(".", "")))
 
             delta_slider = QSlider(Qt.Horizontal)
@@ -868,7 +1010,6 @@ class BoreBarGUI(QMainWindow):
 
             tors_layout.addLayout(tors_controls)
 
-            # Обновление графика
             def update_torsional():
                 params = self._get_current_parameters()
                 params["length"] = length_slider.value() / 10.0
@@ -879,7 +1020,7 @@ class BoreBarGUI(QMainWindow):
                 result = self.model.calculate_torsional(params)
 
                 if len(result["sigma_real"]) > 0:
-                    ax.plot(result["sigma_real"], result["sigma_imag"], "b-", linewidth=1.5)
+                    ax.plot(result["sigma_real"], result["sigma_imag"], color="#1f77b4", linewidth=1.5)
                     ax.axhline(0, color="red", linestyle="--", linewidth=0.7)
                     ax.axvline(0, color="red", linestyle="--", linewidth=0.7)
                     ax.set_title(
@@ -898,15 +1039,15 @@ class BoreBarGUI(QMainWindow):
                         transform=ax.transAxes,
                     )
 
+                tors_fig.tight_layout()
                 tors_canvas.draw_idle()
 
             length_slider.valueChanged.connect(update_torsional)
             delta_slider.valueChanged.connect(update_torsional)
-
             update_torsional()
             tabs.addTab(tors_tab, "Крутильные")
 
-            # --- Продольные колебания ---
+            # --- Продольные ---
             long_tab = QWidget()
             long_layout = QVBoxLayout(long_tab)
 
@@ -914,7 +1055,6 @@ class BoreBarGUI(QMainWindow):
             long_canvas = FigureCanvas(long_fig)
             long_toolbar = NavigationToolbar(long_canvas, long_tab)
 
-            long_ax = long_fig.add_subplot(111)
             long_layout.addWidget(long_toolbar)
             long_layout.addWidget(long_canvas)
 
@@ -949,7 +1089,7 @@ class BoreBarGUI(QMainWindow):
                     K1_MN = result["K1"] / 1e6
                     delta_kNs = result["delta"] / 1e3
 
-                    ax.plot(K1_MN, delta_kNs, "b-", linewidth=1.5)
+                    ax.plot(K1_MN, delta_kNs, color="#2ca02c", linewidth=1.5)
                     ax.axhline(0, color="black", linestyle="--", linewidth=0.7)
 
                     ax.set_title(
@@ -968,15 +1108,15 @@ class BoreBarGUI(QMainWindow):
                         transform=ax.transAxes,
                     )
 
+                long_fig.tight_layout()
                 long_canvas.draw_idle()
 
             mu_slider.valueChanged.connect(update_longitudinal)
             tau_slider.valueChanged.connect(update_longitudinal)
-
             update_longitudinal()
             tabs.addTab(long_tab, "Продольные")
 
-            # --- Поперечные колебания ---
+            # --- Поперечные ---
             trans_tab = QWidget()
             trans_layout = QVBoxLayout(trans_tab)
 
@@ -984,7 +1124,6 @@ class BoreBarGUI(QMainWindow):
             trans_canvas = FigureCanvas(trans_fig)
             trans_toolbar = NavigationToolbar(trans_canvas, trans_tab)
 
-            trans_ax = trans_fig.add_subplot(111)
             trans_layout.addWidget(trans_toolbar)
             trans_layout.addWidget(trans_canvas)
 
@@ -1023,7 +1162,7 @@ class BoreBarGUI(QMainWindow):
                 result = self.model.calculate_transverse(params)
 
                 if len(result["W_real"]) > 0:
-                    ax.plot(result["W_real"], result["W_imag"], "b-", linewidth=1.5)
+                    ax.plot(result["W_real"], result["W_imag"], color="#9467bd", linewidth=1.5)
                     ax.axhline(0, color="red", linestyle="--", linewidth=0.7)
                     ax.axvline(0, color="red", linestyle="--", linewidth=0.7)
 
@@ -1045,16 +1184,15 @@ class BoreBarGUI(QMainWindow):
                         transform=ax.transAxes,
                     )
 
+                trans_fig.tight_layout()
                 trans_canvas.draw_idle()
 
             K_slider.valueChanged.connect(update_transverse)
             mu2_slider.valueChanged.connect(update_transverse)
             tau2_slider.valueChanged.connect(update_transverse)
-
             update_transverse()
             tabs.addTab(trans_tab, "Поперечные")
 
-            # Кнопка закрытия
             close_btn = QPushButton("Закрыть")
             close_btn.clicked.connect(dialog.accept)
             layout.addWidget(close_btn, alignment=Qt.AlignRight)
@@ -1062,6 +1200,55 @@ class BoreBarGUI(QMainWindow):
             dialog.exec_()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось запустить интерактивный режим:\n{e}")
+
+    # ----------------------------------------------------------------------
+    # Окна справки
+    # ----------------------------------------------------------------------
+
+    def _show_user_guide(self):
+        """Диалог «Инструкция пользователю»."""
+        text = (
+            "<b>Инструкция пользователю</b><br><br>"
+            "<b>1. Задание параметров системы</b><br>"
+            "• В левой части окна задайте материальные, геометрические параметры и параметры трения.<br>"
+            "• Единицы измерения указаны в подписях к полям (Па, м, кг/м³ и т.д.).<br>"
+            "• При необходимости можно сохранить/загрузить набор параметров через кнопки внизу панели.<br><br>"
+            "<b>2. Анализ крутильных колебаний</b><br>"
+            "• Выберите вкладку «Крутильные».<br>"
+            "• Нажмите кнопку «Выполнить анализ».<br>"
+            "• На графике строится кривая D-разбиения σ(p). Красная точка — пересечение Im(σ)=0.<br>"
+            "• Численные значения ω*, Re(σ(ω*)) и f* выводятся в блоке «Точка пересечения» слева.<br><br>"
+            "<b>3. Анализ продольных и поперечных колебаний</b><br>"
+            "• Перейдите на вкладку «Продольные» или «Поперечные».<br>"
+            "• Нажмите «Выполнить анализ» — построятся соответствующие кривые K₁–δ или годограф W(p).<br><br>"
+            "<b>4. Диаграмма устойчивости по δ₁</b><br>"
+            "• Перейдите на вкладку «Диаграмма устойчивости».<br>"
+            "• Нажмите «Построить диаграмму устойчивости».<br>"
+            "• По оси X откладываются значения δ₁ (с учётом множителя), по оси Y — Re(σ(ω*)).<br><br>"
+            "<b>5. Интерактивный режим</b><br>"
+            "• Нажмите кнопку «Интерактивный режим».<br>"
+            "• В открывшемся окне на вкладках можно изменять L, δ₁, μ, τ, K с помощью слайдеров.<br>"
+            "• Графики обновляются автоматически при изменении параметров.<br><br>"
+            "<b>6. Экспорт результатов</b><br>"
+            "• Нажмите «Экспорт результатов», выберите формат (JSON или CSV) и имя файла.<br>"
+            "• В файл сохраняются параметры системы и рассчитанные кривые для крутильных и продольных колебаний.<br>"
+        )
+        QMessageBox.information(self, "Инструкция пользователю", text)
+
+    def _show_about_dialog(self):
+        """Диалог «О программе»."""
+        text = (
+            "<b>Анализ колебаний борштанги</b><br><br>"
+            "Программа реализует расчёт крутильных, продольных и поперечных "
+            "колебаний борштанги на основе математических моделей из курсовой работы "
+            "и строит соответствующие кривые D-разбиения и годографы.<br><br>"
+            "Интерфейс позволяет:<br>"
+            "• задавать физические и геометрические параметры системы;<br>"
+            "• анализировать устойчивость при разных значениях δ₁, μ, τ и K;<br>"
+            "• в интерактивном режиме исследовать влияние параметров на форму кривых.<br><br>"
+            "Курсовая работа, ФИИТ-4 курс."
+        )
+        QMessageBox.about(self, "О программе", text)
 
 
 if __name__ == "__main__":
