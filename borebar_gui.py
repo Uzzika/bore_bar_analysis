@@ -80,6 +80,7 @@ class BoreBarGUI(QMainWindow):
         self.resize(1600, 900)
 
         self.model = BoreBarModel()
+        self._init_presets()
 
         self._init_ui()
         self._create_menubar()
@@ -112,6 +113,87 @@ class BoreBarGUI(QMainWindow):
 
         # Небольшие косметические стили
         self._apply_styles()
+        
+    def _init_presets(self):
+        """Инициализация словаря типовых конфигураций (пресетов).
+
+        Все значения подобраны так, чтобы:
+        - по δ₁ было видно переход от почти критического случая к сильно
+            демпфированному;
+        - по L было заметно влияние длины на устойчивость;
+        - по μ, τ диаграмма K₁–δ сильно менялась (эффект запаздывания).
+        """
+        self.presets = {
+            # 1. Базовый устойчивый режим: разумный запас по устойчивости,
+            # кривая σ(p) заметно «слева» от оси Im σ.
+            "Базовый режим (устойчивый, L = 2.5 м)": {
+                "length": 2.5,
+                "delta1": 3.44e-6,   # базовое внутр. трение
+                "multiplier": 2,     # чуть усиленное демпфирование
+                "mu": 0.10,          # слабое внешнее трение
+                "tau": 60e-3,        # умеренное запаздывание
+                "K_cut": 6e5,
+                "beta": 0.3,
+                "h": 0.05,
+            },
+
+            # 2. Почти граница по δ₁: внутреннее трение почти нулевое,
+            # Re σ(ω*) ≈ 0 (по модели), кривая σ(p) почти касается оси Im σ.
+            "Почти граница по δ₁ (L = 2.5 м)": {
+                "length": 2.5,
+                "delta1": 1e-8,      # очень маленькое δ₁ → почти критический случай
+                "multiplier": 1,
+                "mu": 0.10,
+                "tau": 60e-3,
+                "K_cut": 6e5,
+                "beta": 0.3,
+                "h": 0.0,
+            },
+
+            # 3. Длинная борштанга: тот же уровень демпфирования, но L больше,
+            # собственные частоты ниже, устойчивость хуже, что видно на всех
+            # трёх видах колебаний.
+            "Длинная борштанга (L = 6 м)": {
+                "length": 6.0,
+                "delta1": 3.44e-6,
+                "multiplier": 2,
+                "mu": 0.10,
+                "tau": 60e-3,
+                "K_cut": 6e5,
+                "beta": 0.3,
+                "h": 0.05,
+            },
+
+            # 4. Повышенное внутр. трение: сильно демпфированная система,
+            # σ(p) уходит далеко влево (Re σ сильно отрицателен), хороший пример
+            # «глубоко устойчивого» режима.
+            "Повышенное внутреннее трение δ₁": {
+                "length": 2.5,
+                "delta1": 8e-6,      # больше базового
+                "multiplier": 4,     # усиливаем ещё и множителем
+                "mu": 0.10,
+                "tau": 60e-3,
+                "K_cut": 6e5,
+                "beta": 0.4,
+                "h": 0.1,
+            },
+
+            # 5. Большое запаздывание и сильное внешнее трение:
+            # диаграмма K₁–δ становится сильно «растянутой», δ₀ сильно уходит
+            # вниз, хорошо видно влияние μ и τ на границу устойчивости продольных
+            # колебаний.
+            "Большое запаздывание τ, μ ≈ 0.9": {
+                "length": 2.5,
+                "delta1": 3.44e-6,
+                "multiplier": 2,
+                "mu": 0.90,          # почти единица → сильное влияние запаздывания
+                "tau": 0.12,         # больше, чем базовые 0.06
+                "K_cut": 6e5,
+                "beta": 0.3,
+                "h": 0.05,
+            },
+        }
+
 
     def _create_menubar(self):
         """Создание меню (Справка → Инструкция / О программе)."""
@@ -166,6 +248,7 @@ class BoreBarGUI(QMainWindow):
         self._create_geometry_group()
         self._create_transverse_group()
         self._create_friction_group()
+        self._create_presets_group()
         self._create_params_buttons()
         self._create_intersection_panel()
 
@@ -377,6 +460,90 @@ class BoreBarGUI(QMainWindow):
         )
 
         self.params_layout.addWidget(group)
+
+    def _create_presets_group(self):
+        """Блок выбора типовых конфигураций параметров."""
+        group = QGroupBox("Типовые конфигурации")
+        layout = QVBoxLayout(group)
+
+        label = QLabel("Быстрый выбор набора параметров:")
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("— не выбрано —")
+        # Имена пресетов берём из словаря, чтобы не дублировать строки
+        for name in self.presets.keys():
+            self.preset_combo.addItem(name)
+
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+
+        layout.addWidget(label)
+        layout.addWidget(self.preset_combo)
+
+        self.params_layout.addWidget(group)
+
+    def _on_preset_changed(self, index: int):
+        """Обработчик выбора пресета: применить параметры из словаря."""
+        # Нулевой элемент — "не выбрано"
+        if index <= 0:
+            return
+
+        if not hasattr(self, "presets"):
+            return
+
+        name = self.preset_combo.currentText()
+        preset = self.presets.get(name)
+        if not preset:
+            return
+
+        # Материальные
+        if "rho" in preset:
+            self.rho_spin.setValue(preset["rho"])
+        if "G" in preset:
+            self.G_spin.setValue(preset["G"])
+        if "E" in preset:
+            self.E_spin.setValue(preset["E"])
+
+        # Геометрия
+        if "S" in preset:
+            self.S_spin.setValue(preset["S"])
+        if "Jr" in preset:
+            self.Jr_spin.setValue(preset["Jr"])
+        if "Jp" in preset:
+            self.Jp_spin.setValue(preset["Jp"])
+
+        # Поперечные колебания
+        if "R" in preset:
+            self.R_spin.setValue(preset["R"])
+        if "r" in preset:
+            self.r_spin.setValue(preset["r"])
+        if "K_cut" in preset:
+            self.K_cut_spin.setValue(preset["K_cut"])
+        if "beta" in preset:
+            self.beta_spin.setValue(preset["beta"])
+        if "h" in preset:
+            self.h_spin.setValue(preset["h"])
+
+        # Трение и запаздывание
+        if "delta1" in preset:
+            self.delta1_spin.setValue(preset["delta1"])
+        if "mu" in preset:
+            self.mu_spin.setValue(preset["mu"])
+        if "tau" in preset:
+            self.tau_spin.setValue(preset["tau"])
+
+        # Длина и множитель
+        if "length" in preset:
+            length_str = str(preset["length"])
+            idx_len = self.length_combo.findText(length_str)
+            if idx_len >= 0:
+                self.length_combo.setCurrentIndex(idx_len)
+
+        if "multiplier" in preset:
+            mult_str = str(preset["multiplier"])
+            idx_mult = self.multiplier_combo.findText(mult_str)
+            if idx_mult >= 0:
+                self.multiplier_combo.setCurrentIndex(idx_mult)
+
+        self.status_bar.showMessage(f"Применён пресет: {name}", 3000)
 
     def _create_params_buttons(self):
         row = QHBoxLayout()

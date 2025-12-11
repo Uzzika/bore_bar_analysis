@@ -167,6 +167,91 @@ class BoreBarModel:
             }
         except Exception:
             return None
+        
+    @staticmethod
+    def find_critical_delta1(params: dict) -> dict | None:
+        """
+        Поиск критического значения δ₁,кр, при котором Re σ(iω*) = 0
+        (граница устойчивости для крутильных колебаний).
+
+        Параметры:
+          params: словарь, как для calculate_torsional/find_intersection.
+                  Используется поле 'delta1' как базовое значение δ₁.
+
+        Возвращает dict:
+            'delta_crit'         — критическое δ₁ (с),
+            'delta_crit_scaled'  — δ₁ × 1e6 (для удобства графиков),
+            'omega'              — ω* (рад/с),
+            'frequency'          — f* (Гц),
+        либо None, если найти не удалось.
+        """
+        base_delta = params["delta1"]
+        if base_delta <= 0:
+            return None
+
+        # Вспомогательная функция: Re σ(iω*) для заданного δ₁
+        def re_sigma_for_delta(delta_val: float) -> float:
+            local_params = dict(params)
+            local_params["delta1"] = delta_val
+            inter = BoreBarModel.find_intersection(local_params)
+            if inter is None:
+                return np.nan
+            return inter["re_sigma"]
+
+        # Подбираем несколько точек по δ₁ вокруг базового значения
+        factors = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
+        deltas = []
+        values = []
+
+        for k in factors:
+            d_val = base_delta * k
+            val = re_sigma_for_delta(d_val)
+            if not (np.isnan(val) or np.isinf(val)):
+                deltas.append(d_val)
+                values.append(val)
+
+        if len(deltas) < 2:
+            return None
+
+        # Ищем пару точек со сменой знака Re σ
+        bracket = None
+        for i in range(len(values) - 1):
+            if values[i] == 0.0:
+                bracket = (deltas[i], deltas[i])
+                break
+            if values[i] * values[i + 1] < 0:
+                bracket = (deltas[i], deltas[i + 1])
+                break
+
+        if bracket is None:
+            return None
+
+        # Если ровно попали в корень — корень найден
+        if bracket[0] == bracket[1]:
+            delta_crit = bracket[0]
+        else:
+            # Используем тот же root_scalar, что уже импортирован в модуле
+            def f(delta_val: float) -> float:
+                return re_sigma_for_delta(delta_val)
+
+            sol = root_scalar(f, bracket=bracket, method="brentq")
+            if not sol.converged:
+                return None
+            delta_crit = sol.root
+
+        # Считаем характеристики в критической точке
+        local_params = dict(params)
+        local_params["delta1"] = delta_crit
+        inter = BoreBarModel.find_intersection(local_params)
+        if inter is None:
+            return None
+
+        return {
+            "delta_crit": float(delta_crit),
+            "delta_crit_scaled": float(delta_crit * 1e6),
+            "omega": inter["omega"],
+            "frequency": inter["frequency"],
+        }
 
     # -------------------------------------------------------------------------
     # Продольные колебания
