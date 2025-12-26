@@ -376,10 +376,15 @@ class BoreBarModel:
             β = коэффициент вязкого демпфирования (beta)
             γ = E J ∫₀ᴸ φ''(x)² dx
 
-        φ(x) — первая собственная форма консольной балки.
-        Мы используем классическую аналитическую форму, эквивалентную
-        выражению через функции Крылова из теоретической части, но с другой
-        нормировкой (масштаб φ сокращается в W(p)).
+        φ(x) — первая собственная форма (координатная функция) из исследования.
+
+        В приложении (Maple) собственная форма задана в виде комбинации
+        гиперболических/тригонометрических функций с численным коэффициентом 0.734
+        и множителем 1/2 (см. фрагмент Maple-скрипта в исследовании).
+
+        Важно: цель этой функции — воспроизвести годограф W(p) так, как он
+        построен в исследовании (рис. 3.1), поэтому форму φ(x) и производную
+        берём в той же записи, что и в исходных численных экспериментах.
         """
         E = params["E"]
         rho = params["rho"]
@@ -397,45 +402,21 @@ class BoreBarModel:
         m = rho * S                        # погонная масса
         J = np.pi * (R**4 - r**4) / 4.0    # изгибной момент инерции
 
-        # ----- Собственная форма φ(x) для консольной балки -----
-        # alpha1_const — первый корень уравнения для консольной балки.
-        alpha1_const = 1.875104068711961
-        lam = alpha1_const / L
+        # ----- Собственная форма φ(x) (как в исследовании / Maple) -----
+        # В Maple использовано: k1 := 1.875 / l; (см. исследование)
+        k1 = 1.875 / L
+        A = 0.734
+        C = (1.0 - A) / 2.0  # 1/2 - 0.734/2
 
+        # φ(x) из Maple-скрипта: 1/2*(sinh(k1*x)-sin(k1*x)) - 0.734/2*(sinh(k1*x)-sin(k1*x))
         def phi(x: np.ndarray) -> np.ndarray:
-            """
-            Первая собственная форма консольной балки:
-                φ(x) = cosh(λx) - cos(λx) - A (sinh(λx) - sin(λx)),
-            где A зависит от значений в точке x = L.
-            """
             x = np.asarray(x)
-            cosh_lx = np.cosh(lam * x)
-            cos_lx = np.cos(lam * x)
-            sinh_lx = np.sinh(lam * x)
-            sin_lx = np.sin(lam * x)
+            return C * (np.sinh(k1 * x) - np.sin(k1 * x))
 
-            denom = np.sinh(lam * L) + np.sin(lam * L)
-            num = np.cosh(lam * L) + np.cos(lam * L)
-            A = num / denom
-
-            return cosh_lx - cos_lx - A * (sinh_lx - sin_lx)
-
+        # φ''(x) для этой формы: C*k1^2*(sinh(k1*x) + sin(k1*x))
         def phi_pp(x: np.ndarray) -> np.ndarray:
-            """
-            Вторая производная φ''(x).
-            Нужна для вычисления изгибной энергии и коэффициента γ.
-            """
             x = np.asarray(x)
-            cosh_lx = np.cosh(lam * x)
-            cos_lx = np.cos(lam * x)
-            sinh_lx = np.sinh(lam * x)
-            sin_lx = np.sin(lam * x)
-
-            denom = np.sinh(lam * L) + np.sin(lam * L)
-            num = np.cosh(lam * L) + np.cos(lam * L)
-            A = num / denom
-
-            return lam**2 * (cosh_lx + cos_lx - A * (sinh_lx + sin_lx))
+            return C * (k1**2) * (np.sinh(k1 * x) + np.sin(k1 * x))
 
         # ----- Численное вычисление α и γ через интегралы -----
         x_grid = np.linspace(0.0, L, 1000)
@@ -446,7 +427,7 @@ class BoreBarModel:
         gamma = E * J * np.trapz(phi_pp_vals**2, x_grid)
 
         # Диапазон частот (как в Maple-примере, 0..220 рад/с)
-        omega = np.linspace(0.1, 220.0, 2000)
+        omega = np.linspace(0.0, 220.0, 2000)
         p = 1j * omega
         phi_L = phi(L)
 

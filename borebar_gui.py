@@ -192,6 +192,24 @@ class BoreBarGUI(QMainWindow):
                 "beta": 0.3,
                 "h": 0.05,
             },
+
+            # 6. Поперечные колебания: параметры как в исследовании (рис. 3.1)
+            # R = 0.04 м, r = 0.035 м, τ = 0.1 с, l = 2.7 м.
+            "Поперечные (рис. 3.1: R=0.04, r=0.035, τ=0.1, L=2.7)": {
+                "length": 2.7,
+                "E": 2.1e11,
+                "rho": 7800.0,
+                "mu": 0.6,
+                "tau": 0.1,
+                "R": 0.04,
+                "r": 0.035,
+                "K_cut": 6e5,
+                "beta": 0.3,
+                "h": 0.0,
+
+                # Остальные поля (δ₁, множитель) в этом пресете не критичны для
+                # поперечных колебаний, оставляем текущими.
+            },
         }
 
 
@@ -305,7 +323,10 @@ class BoreBarGUI(QMainWindow):
 
         length_label = QLabel("Длина борштанги L (м):")
         self.length_combo = QComboBox()
-        self.length_combo.addItems(["2.5", "3", "4", "5", "6"])
+        # В исследовании по поперечным колебаниям фигурирует L = 2.7 м.
+        # Чтобы не ограничиваться фиксированным списком — делаем поле редактируемым.
+        self.length_combo.setEditable(True)
+        self.length_combo.addItems(["2.5", "2.7", "3", "4", "5", "6"])
 
         length_layout.addWidget(length_label)
         length_layout.addWidget(self.length_combo)
@@ -536,6 +557,13 @@ class BoreBarGUI(QMainWindow):
             idx_len = self.length_combo.findText(length_str)
             if idx_len >= 0:
                 self.length_combo.setCurrentIndex(idx_len)
+            else:
+                # Если список фиксированный, но ComboBox редактируемый —
+                # аккуратно вставляем значение как текст.
+                try:
+                    self.length_combo.setEditText(length_str)
+                except Exception:
+                    pass
 
         if "multiplier" in preset:
             mult_str = str(preset["multiplier"])
@@ -993,7 +1021,35 @@ class BoreBarGUI(QMainWindow):
             ax.set_title("Поперечные колебания: годограф W(p)")
             ax.set_xlabel("Re(W)")
             ax.set_ylabel("Im(W)")
-            ax.grid(True, linestyle=":", alpha=0.7)
+            ax.set_aspect("auto")
+
+            # --- Масштаб/вид как в исследовании ---
+            # В исходной работе (рис. 3.1) годограф показан «вокруг» отрицательной
+            # действительной оси (Re(W) ≤ 0) и с примерно одинаковым масштабом по осям.
+            # Поэтому делаем:
+            #   1) равный масштаб по осям;
+            #   2) если положительная часть по Re(W) не доминирует, прижимаем правую
+            #      границу к 0 (это визуально приближает к рисунку из исследования).
+            x = np.asarray(result["W_real"], dtype=float)
+            y = np.asarray(result["W_imag"], dtype=float)
+            if x.size > 0 and y.size > 0:
+                xmin = float(np.nanmin(x))
+                xmax = float(np.nanmax(x))
+                yabs = float(np.nanmax(np.abs(y)))
+
+                # Равный масштаб
+                ax.set_aspect("equal", adjustable="box")
+
+                # Поджимаем справа к 0, если "правая" часть не слишком важна
+                if xmin < 0 and xmax > 0 and xmax <= 0.35 * abs(xmin):
+                    xmax = 0.0
+                if xmax <= 0:
+                    ax.set_xlim(1.05 * xmin, 0.0)
+                else:
+                    ax.set_xlim(1.05 * xmin, 1.05 * xmax)
+
+                if yabs > 0:
+                    ax.set_ylim(-1.05 * yabs, 1.05 * yabs)
             # Обновляем текстовый блок с характеристиками
             W_complex = result["W_real"] + 1j * result["W_imag"]
             absW = np.abs(W_complex)
