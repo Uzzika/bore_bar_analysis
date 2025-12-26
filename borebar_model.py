@@ -260,77 +260,108 @@ class BoreBarModel:
     @staticmethod
     def calculate_longitudinal(params: dict) -> dict:
         """
-        Расчёт D-разбиения для продольных колебаний.
+        Продольные колебания: кривая D-разбиения (K₁, δ) в плоскости параметров.
 
-        Используем формулы из теоретической части / Maple:
-
+        Формулы как в Matlab-листинге исследования:
             a² = E / ρ
-            x  = ω L / a²
+            K₁(ω) = (E S / a²) * ω * cot( ω L / a² ) / (1 - μ cos(ω τ))
+            δ(ω)  = -(E S μ / a²) * cot( ω L / a² ) * sin(ω τ) / (1 - μ cos(ω τ))
 
-            K₁(ω) = (E S / a²) * ω cot(x) / (1 - μ cos(ω τ))
-            δ(ω)  = -(E S μ / a²) * cot(x) sin(ω τ) / (1 - μ cos(ω τ))
+        Примечание по единицам:
+        В листинге τ=60 и ω=0..0.4 очень похоже на миллисекундную шкалу.
+        В GUI τ обычно вводят в секундах (0.06 для 60 мс),
+        поэтому для аргумента cot(·) по умолчанию используется множитель time_scale=1000
+        (сек → мс), чтобы форма графика была ближе к исследованию.
 
-        Здесь:
-            E     — модуль Юнга,
-            S     — площадь сечения,
-            ρ     — плотность,
-            L     — длина,
-            μ     — коэффициент трения (внешний/запаздывания),
-            τ     — время запаздывания.
+        Переопределения (если захочешь):
+            longitudinal_time_scale (по умолчанию 1000),
+            omega_max_longitudinal (по умолчанию 400 рад/с),
+            omega_points_longitudinal (по умолчанию 12000).
         """
-        E = params["E"]
-        S = params["S"]
-        rho = params["rho"]
-        L = params["length"]
-        mu = params["mu"]
-        tau = params["tau"]
+        E = float(params["E"])
+        rho = float(params["rho"])
+        S = float(params["S"])
 
-        # a² = E/ρ (в теории обычно a — скорость продольной волны, но здесь достаточно a²)
+        # длина
+        if "length" in params:
+            L = float(params["length"])
+        elif "L" in params:
+            L = float(params["L"])
+        else:
+            raise KeyError("length")
+
+        # μ и τ (GUI даёт mu/tau; старые версии могли давать mu_long/tau_long)
+        if "mu" in params:
+            mu = float(params["mu"])
+        elif "mu_long" in params:
+            mu = float(params["mu_long"])
+        else:
+            raise KeyError("mu")
+
+        if "tau" in params:
+            tau = float(params["tau"])
+        elif "tau_long" in params:
+            tau = float(params["tau_long"])
+        else:
+            raise KeyError("tau")
+
         a2 = E / rho
-        # Основная собственная частота (формально, но пригодится для справки)
-        omega_main = np.pi * a2 / L
 
-        # Диапазон частот
-        omega = np.linspace(0.01, 2.0 * np.pi * 100.0, 5000)
+        # Масштаб для аргумента cot(·): 1000 = «сек → мс»
+        time_scale = float(params.get("longitudinal_time_scale", 1000.0))
 
-        with np.errstate(all="ignore"):
-            x = omega * L / a2
-            sin_x = np.sin(x)
-            cos_x = np.cos(x)
+        omega_max = float(params.get("omega_max_longitudinal", 400.0))
+        omega_points = int(params.get("omega_points_longitudinal", 12000))
+        omega_points = max(2000, omega_points)
 
-            # Вычисляем cot(x) = cos(x)/sin(x) с защитой от деления на 0
-            mask_cot = np.abs(sin_x) > 1e-6
-            cot = np.zeros_like(x)
-            cot[mask_cot] = cos_x[mask_cot] / sin_x[mask_cot]
+        omega = np.linspace(1e-3, omega_max, omega_points)
 
-            # Знаменатель (1 - μ cos(ω τ)) с мягкой регуляризацией
-            denom = 1.0 - mu * np.cos(omega * tau)
-            eps = 1e-6
-            denom_safe = np.where(np.abs(denom) < eps, eps * np.sign(denom + 1e-12), denom)
+        # x = ω L / a² (с учётом масштаба)
+        x = omega * L * time_scale / a2
 
-            K1 = (E * S / a2) * omega * cot / denom_safe
-            delta = -(E * S * mu / a2) * cot * np.sin(omega * tau) / denom_safe
+        eps = 1e-9
+        sin_x = np.sin(x)
+        cos_x = np.cos(x)
 
-            # Фильтруем некорректные/слишком большие значения
-            valid = (
-                mask_cot
-                & np.isfinite(K1)
-                & np.isfinite(delta)
-                & (K1 > 0)
-                & (K1 < 1e10)
-                & (np.abs(delta) < 1e6)
-            )
+        cot_x = np.full_like(x, np.nan, dtype=float)
+        mask_cot = np.abs(sin_x) > eps
+        cot_x[mask_cot] = cos_x[mask_cot] / sin_x[mask_cot]
+
+        denom = 1.0 - mu * np.cos(omega * tau)
+        mask_denom = np.abs(denom) > eps
+
+        valid = mask_cot & mask_denom
+
+        K1 = np.full_like(omega, np.nan, dtype=float)
+        delta = np.full_like(omega, np.nan, dtype=float)
+
+        K1[valid] = (E * S / a2) * omega[valid] * cot_x[valid] / denom[valid]
+        delta[valid] = -(E * S * mu / a2) * cot_x[valid] * np.sin(omega[valid] * tau) / denom[valid]
+
+        # Ограничим выбросы (NaN оставляем — matplotlib сам разорвёт линию)
+        K1_max = float(params.get("K1_max_longitudinal", 1e10))
+        delta_max = float(params.get("delta_max_longitudinal", 1e7))
+        bad = (np.abs(K1) > K1_max) | (np.abs(delta) > delta_max)
+        K1[bad] = np.nan
+        delta[bad] = np.nan
+
+        # Пределы при ω→0 (в справочный блок)
+        K1_0 = (E * S) / (L * (1.0 - mu))
+        delta_0 = -(E * S * mu * tau) / (L * (1.0 - mu))
+
+        # Ориентир: режим x=π
+        omega_main = float(np.pi * a2 / (L * time_scale))
 
         return {
-            "omega": omega[valid],
-            "K1": K1[valid],
-            "delta": delta[valid],
-            "a": a2,
+            "omega": omega,
+            "K1": K1,
+            "delta": delta,
             "omega_main": omega_main,
-            # Пределы при ω → 0
-            "K1_0": (E * S) / (L * (1.0 - mu)),
-            "delta_0": -(E * S * mu * tau) / (L * (1.0 - mu)),
+            "K1_0": K1_0,
+            "delta_0": delta_0,
+            "a": a2,
         }
+
 
     # -------------------------------------------------------------------------
     # Сравнительный анализ (зависимости от длины)
@@ -408,12 +439,12 @@ class BoreBarModel:
         A = 0.734
         C = (1.0 - A) / 2.0  # 1/2 - 0.734/2
 
-        # φ(x) из Maple-скрипта: 1/2*(sinh(k1*x)-sin(k1*x)) - 0.734/2*(sinh(k1*x)-sin(k1*x))
+        # φ(x) из Maple-скрипта
         def phi(x: np.ndarray) -> np.ndarray:
             x = np.asarray(x)
             return C * (np.sinh(k1 * x) - np.sin(k1 * x))
 
-        # φ''(x) для этой формы: C*k1^2*(sinh(k1*x) + sin(k1*x))
+        # φ''(x) для этой формы
         def phi_pp(x: np.ndarray) -> np.ndarray:
             x = np.asarray(x)
             return C * (k1**2) * (np.sinh(k1 * x) + np.sin(k1 * x))

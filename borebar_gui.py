@@ -14,6 +14,7 @@ borebar_gui.py
 import sys
 import json
 import csv
+import traceback
 
 import numpy as np
 
@@ -952,10 +953,15 @@ class BoreBarGUI(QMainWindow):
         """Построение D-разбиения K₁–δ для продольных колебаний."""
         self.longitudinal_figure.clear()
         ax = self.longitudinal_figure.add_subplot(111)
-
         result = self.model.calculate_longitudinal(params)
 
-        if len(result["K1"]) == 0:
+        K1_MN = np.asarray(result.get("K1", []), dtype=float) / 1e6
+        delta_kNs = np.asarray(result.get("delta", []), dtype=float) / 1e3
+
+        # главное: проверяем, есть ли вообще хоть одна "живая" точка
+        mask = np.isfinite(K1_MN) & np.isfinite(delta_kNs)
+
+        if K1_MN.size == 0 or np.count_nonzero(mask) == 0:
             ax.text(
                 0.5,
                 0.5,
@@ -966,9 +972,7 @@ class BoreBarGUI(QMainWindow):
             )
             self.longitudinal_info_label.setText("Анализ не выполнен (нет данных).")
         else:
-            K1_MN = result["K1"] / 1e6
-            delta_kNs = result["delta"] / 1e3
-
+            # важно: рисуем ПОЛНЫЕ массивы с NaN, чтобы matplotlib сам разорвал кривую на разрывах
             ax.plot(K1_MN, delta_kNs, color="#2ca02c", linewidth=1.5)
             ax.axhline(0, color="black", linestyle="--", linewidth=0.7)
 
@@ -976,7 +980,7 @@ class BoreBarGUI(QMainWindow):
             ax.set_xlabel("K₁, МН/м")
             ax.set_ylabel("δ, кН·с/м")
             ax.grid(True, linestyle=":", alpha=0.7)
-            # Обновляем текстовый блок с характеристиками
+
             K1_0 = result.get("K1_0")
             delta_0 = result.get("delta_0")
             omega_main = result.get("omega_main")
@@ -987,10 +991,6 @@ class BoreBarGUI(QMainWindow):
                 f"K₁(0) ≈ {K1_0:.2e} Н/м\n"
                 f"δ(0) ≈ {delta_0:.2e} Н·с/м"
             )
-
-
-        self.longitudinal_figure.tight_layout()
-        self.longitudinal_canvas.draw()
 
     # ----------------------------------------------------------------------
     # Поперечные колебания
