@@ -102,16 +102,17 @@ class BoreBarModel:
             "lambda2": lambda2,
             "delta1": delta1,
         }
-
+    
     @staticmethod
     def find_intersection(params: dict) -> dict | None:
         """
         Поиск точки пересечения кривой σ(p) с осью Im(σ) = 0 для крутильных колебаний.
 
-        Это соответствует одному из предельных значений при D-разбиении
-        и даёт:
-            - критическую частоту ω*
-            - Re(σ(ω*)), по которой можно судить об устойчивости.
+        ВАЖНО (вариант 2):
+        - ищем ВСЕ корни Im σ(iω)=0 на заданном диапазоне частот,
+        - выбираем корень с минимальной ω (низкочастотная ветка),
+        чтобы диаграмма устойчивости не "перескакивала" на другую ветку
+        (классическая проблема для L=6 и т.п.).
         """
         rho = params["rho"]
         G = params["G"]
@@ -125,8 +126,7 @@ class BoreBarModel:
 
         def im_sigma(omega_val: float) -> float:
             """
-            Вспомогательная функция: мнимая часть σ(i ω)
-            для фиксированной частоты ω.
+            Мнимая часть σ(i ω). Если точка численно плохая — возвращаем NaN.
             """
             p_val = 1j * omega_val
             with np.errstate(all="ignore"):
@@ -134,37 +134,111 @@ class BoreBarModel:
                 arg = lambda2 * p_val / expr
                 cth = BoreBarModel._coth(arg)
                 sigma_val = -p_val - lambda1 * expr * cth
-                return float(np.imag(sigma_val))
+                val = np.imag(sigma_val)
+
+            # brentq не любит inf/nan
+            if not np.isfinite(val):
+                return np.nan
+            return float(val)
 
         try:
-            # Подбираем корень Im σ(ω) = 0 на нескольких интервалах частот
-            brackets = [(500, 2000), (2000, 5000), (5000, 10000), (10000, 20000)]
-            omega_cross = None
+            # Диапазоны как раньше, но теперь внутри каждого ищем все смены знака
+            intervals = [(500.0, 2000.0), (2000.0, 5000.0), (5000.0, 10000.0), (10000.0, 20000.0)]
 
-            for a, b in brackets:
-                try:
-                    sol = root_scalar(im_sigma, bracket=(a, b), method="brentq")
-                    if sol.converged:
-                        omega_cross = sol.root
-                        break
-                except Exception:
+            roots: list[float] = []
+
+            for a, b in intervals:
+                # Плотность сетки: можно увеличить, если хочешь ещё устойчивее ловить корни
+                grid_n = 800  # достаточно, чтобы не "перепрыгивать" через корни
+                omega_grid = np.linspace(a, b, grid_n)
+
+                vals = np.array([im_sigma(w) for w in omega_grid], dtype=float)
+                finite = np.isfinite(vals)
+
+                if np.count_nonzero(finite) < 2:
                     continue
 
-            if omega_cross is None:
+                # Берём только финитные точки
+                w = omega_grid[finite]
+                v = vals[finite]
+
+                # Кандидаты на "почти ноль" (редко, но бывает)
+                med = np.median(np.abs(v)) if v.size > 0 else 1.0
+                zero_tol = max(1e-9, 1e-6 * med)
+
+                near_zero_idx = np.where(np.abs(v) <= zero_tol)[0]
+                for idx in near_zero_idx:
+                    roots.append(float(w[idx]))
+
+                # Поиск смены знака между соседними точками
+                s = np.sign(v)
+                # нули заменяем на знак ближайшего (чтобы не рвать массив)
+                for i in range(1, len(s)):
+                    if s[i] == 0:
+                        s[i] = s[i - 1] if s[i - 1] != 0 else 1.0
+
+                sign_changes = np.where(s[:-1] * s[1:] < 0)[0]
+
+                for idx in sign_changes:
+                    left_w = float(w[idx])
+                    right_w = float(w[idx + 1])
+
+                    # На всякий случай проверим значения
+                    f_left = im_sigma(left_w)
+                    f_right = im_sigma(right_w)
+                    if not (np.isfinite(f_left) and np.isfinite(f_right)):
+                        continue
+                    if f_left == 0.0:
+                        roots.append(left_w)
+                        continue
+                    if f_right == 0.0:
+                        roots.append(right_w)
+                        continue
+                    if f_left * f_right > 0:
+                        continue
+
+                    try:
+                        sol = root_scalar(im_sigma, bracket=(left_w, right_w), method="brentq")
+                        if sol.converged and np.isfinite(sol.root):
+                            roots.append(float(sol.root))
+                    except Exception:
+                        continue
+
+            if not roots:
                 return None
+
+            # Уникализируем и берём минимальную ω (низкочастотная ветка)
+            roots = sorted(r for r in roots if r > 0 and np.isfinite(r))
+
+            unique_roots: list[float] = []
+            for r in roots:
+                if not unique_roots:
+                    unique_roots.append(r)
+                else:
+                    prev = unique_roots[-1]
+                    # относительный допуск на одинаковые корни
+                    if abs(r - prev) > 1e-6 * (1.0 + abs(prev)):
+                        unique_roots.append(r)
+
+            omega_cross = unique_roots[0]
 
             # Вычисляем Re σ(ω*) в найденной точке
             p_cross = 1j * omega_cross
-            expr = np.sqrt(1.0 + delta1 * p_cross)
-            arg = lambda2 * p_cross / expr
-            cth = BoreBarModel._coth(arg)
-            sigma_cross = -p_cross - lambda1 * expr * cth
+            with np.errstate(all="ignore"):
+                expr = np.sqrt(1.0 + delta1 * p_cross)
+                arg = lambda2 * p_cross / expr
+                cth = BoreBarModel._coth(arg)
+                sigma_cross = -p_cross - lambda1 * expr * cth
+
+            if not (np.isfinite(sigma_cross.real) and np.isfinite(sigma_cross.imag)):
+                return None
 
             return {
-                "omega": omega_cross,
+                "omega": float(omega_cross),
                 "re_sigma": float(np.real(sigma_cross)),
                 "frequency": float(omega_cross / (2.0 * np.pi)),  # Гц
             }
+
         except Exception:
             return None
         

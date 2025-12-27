@@ -37,7 +37,10 @@ from PyQt5.QtWidgets import (
     QDialog,
     QSlider,
     QAction,
+    QLineEdit,
+    QCheckBox,
 )
+
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
     NavigationToolbar2QT as NavigationToolbar,
@@ -739,6 +742,32 @@ class BoreBarGUI(QMainWindow):
         self.stability_tab = QWidget()
         layout = QVBoxLayout(self.stability_tab)
 
+        # ---- Панель настроек диаграммы (как в исследовании) ----
+        controls = QGroupBox("Настройки диаграммы")
+        controls_layout = QHBoxLayout(controls)
+
+        self.compare_lengths_cb = QCheckBox("Сравнить несколько L (как в исследовании)")
+        self.compare_lengths_cb.setChecked(True)
+        controls_layout.addWidget(self.compare_lengths_cb)
+
+        controls_layout.addWidget(QLabel("L (м):"))
+        self.lengths_edit = QLineEdit("2.5, 3, 4, 5, 6")
+        self.lengths_edit.setToolTip(
+            "Список длин для сравнения. Можно вводить через запятую/точку с запятой/пробел.\n"
+            "Примеры: 2.5, 3, 4, 5, 6  или  2,5; 3; 4; 5; 6"
+        )
+        self.lengths_edit.setMinimumWidth(260)
+        controls_layout.addWidget(self.lengths_edit)
+
+        controls_layout.addStretch(1)
+
+        # если сравнение выключено — поле длин не нужно
+        self.lengths_edit.setEnabled(self.compare_lengths_cb.isChecked())
+        self.compare_lengths_cb.toggled.connect(self.lengths_edit.setEnabled)
+
+        layout.addWidget(controls)
+
+        # ---- График ----
         self.stability_figure = Figure()
         self.stability_canvas = FigureCanvas(self.stability_figure)
         self.stability_toolbar = NavigationToolbar(self.stability_canvas, self.stability_tab)
@@ -1065,6 +1094,35 @@ class BoreBarGUI(QMainWindow):
 
         self.transverse_figure.tight_layout()
         self.transverse_canvas.draw()
+    
+    def _parse_lengths_text(self, text: str) -> list:
+        """
+        Разбор списка длин из строки.
+
+        Поддерживаем ввод:
+        - '2.5, 3, 4, 5, 6'
+        - '2,5; 3; 4; 5; 6'
+        - '2.5 3 4 5 6'
+        """
+        import re
+
+        numbers = re.findall(r"[+-]?\d+(?:[.,]\d+)?", text or "")
+        if not numbers:
+            return []
+
+        out = []
+        for s in numbers:
+            s = s.replace(",", ".")
+            try:
+                val = float(s)
+            except ValueError:
+                continue
+            if val > 0:
+                out.append(val)
+
+        # уникальные + отсортированные
+        return sorted(set(out))
+
 
     # ----------------------------------------------------------------------
     # Диаграмма устойчивости по δ₁
@@ -1072,39 +1130,64 @@ class BoreBarGUI(QMainWindow):
 
     def _plot_stability_diagram(self):
         """
-        Построение диаграммы устойчивости:
-        зависимость Re σ(ω*) от δ₁ с разными множителями.
+        Диаграмма устойчивости (крутильные колебания) в виде, как в исследовании:
+
+        Оси:
+        X: δ  = Re(σ(ω*))
+        Y: δ₁
+
+        На одном графике можно сравнить несколько длин L.
         """
         self.stability_figure.clear()
         ax = self.stability_figure.add_subplot(111)
 
         base_params = self._get_current_parameters()
-        base_delta1 = base_params["delta1"]
+        base_delta1 = float(base_params["delta1"])
+
+        # как в Matlab-листинге исследования: 6 значений δ₁ через множители
         multipliers = [1, 2, 3, 4, 6, 10]
+        delta1_scaled = np.array([base_delta1 * m * 1e6 for m in multipliers], dtype=float)  # ×10^-6 с
 
-        delta_values = []
-        re_sigma_values = []
+        # Какие длины сравниваем
+        if hasattr(self, "compare_lengths_cb") and self.compare_lengths_cb.isChecked():
+            lengths = self._parse_lengths_text(getattr(self, "lengths_edit").text())
+            if not lengths:
+                # fallback «как в исследовании»
+                lengths = [2.5, 3.0, 4.0, 5.0, 6.0]
+        else:
+            lengths = [float(base_params["length"])]
 
-        for m in multipliers:
-            params = dict(base_params)
-            params["multiplier"] = m
+        styles = ["-o", "-.x", "--d", "--s", "--*"]
 
-            intersection = self.model.find_intersection(params)
-            delta_values.append(base_delta1 * m * 1e6)
+        for i, L in enumerate(lengths):
+            params_L = dict(base_params)
+            params_L["length"] = float(L)
 
-            if intersection is not None:
-                re_sigma_values.append(intersection["re_sigma"])
-            else:
-                re_sigma_values.append(np.nan)
+            re_sigma = []
+            for m in multipliers:
+                params = dict(params_L)
+                params["multiplier"] = int(m)
 
-        ax.plot(delta_values, re_sigma_values, "o-", color="#ff7f0e", linewidth=1.5)
-        ax.set_xlabel("δ₁ (×10⁻⁶ с)")
-        ax.set_ylabel("Re(σ(ω*))")
-        ax.set_title(
-            f"Диаграмма устойчивости по δ₁\n"
-            f"L = {base_params['length']} м"
-        )
+                inter = self.model.find_intersection(params)
+                re_sigma.append(inter["re_sigma"] if inter is not None else np.nan)
+
+            style = styles[i % len(styles)]
+            ax.plot(
+                re_sigma,
+                delta1_scaled,
+                style,
+                linewidth=1.5,
+                markersize=5,
+                label=f"L = {float(L):g} м",
+            )
+
+        ax.set_xlabel("δ = Re(σ(ω*))")
+        ax.set_ylabel("δ₁ (×10⁻⁶ с)")
+        ax.set_title("Диаграмма устойчивости (как в исследовании): δ — δ₁")
         ax.grid(True, linestyle=":", alpha=0.7)
+
+        if len(lengths) > 1:
+            ax.legend()
 
         self.stability_figure.tight_layout()
         self.stability_canvas.draw()
