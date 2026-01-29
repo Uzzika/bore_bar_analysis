@@ -135,7 +135,7 @@ class BoreBarGUI(QMainWindow):
                 "delta1": 3.44e-6,   # базовое внутр. трение
                 "multiplier": 2,     # чуть усиленное демпфирование
                 "mu": 0.10,          # слабое внешнее трение
-                "tau": 60e-3,        # умеренное запаздывание
+                "tau": 60e-3,        # 60 мс (в листинге Matlab τ=60)
                 "K_cut": 6e5,
                 "beta": 0.3,
                 "h": 0.05,
@@ -148,7 +148,7 @@ class BoreBarGUI(QMainWindow):
                 "delta1": 1e-8,      # очень маленькое δ₁ → почти критический случай
                 "multiplier": 1,
                 "mu": 0.10,
-                "tau": 60e-3,
+                "tau": 60e-3,  # 60 мс (в листинге Matlab τ=60)
                 "K_cut": 6e5,
                 "beta": 0.3,
                 "h": 0.0,
@@ -162,7 +162,7 @@ class BoreBarGUI(QMainWindow):
                 "delta1": 3.44e-6,
                 "multiplier": 2,
                 "mu": 0.10,
-                "tau": 60e-3,
+                "tau": 60e-3,  # 60 мс (в листинге Matlab τ=60)
                 "K_cut": 6e5,
                 "beta": 0.3,
                 "h": 0.05,
@@ -176,7 +176,7 @@ class BoreBarGUI(QMainWindow):
                 "delta1": 8e-6,      # больше базового
                 "multiplier": 4,     # усиливаем ещё и множителем
                 "mu": 0.10,
-                "tau": 60e-3,
+                "tau": 60e-3,  # 60 мс (в листинге Matlab τ=60)
                 "K_cut": 6e5,
                 "beta": 0.4,
                 "h": 0.1,
@@ -949,22 +949,39 @@ class BoreBarGUI(QMainWindow):
             ax.grid(True, linestyle=":", alpha=0.7)
 
             intersection = self.model.find_intersection(params)
-            if intersection is not None:
-                ax.plot(
-                    intersection["re_sigma"],
-                    0,
-                    "o",
-                    color="#d62728",
-                    markersize=8,
-                    label="Пересечение Im(σ)=0",
-                )
-                ax.legend()
 
-                self.intersection_label.setText(
-                    f"ω* = {intersection['omega']:.2f} рад/с\n"
-                    f"Re(σ(ω*)) = {intersection['re_sigma']:.2f}\n"
-                    f"f* = {intersection['frequency']:.2f} Гц"
-                )
+            def fmt(x, nd=2):
+                try:
+                    return f"{float(x):.{nd}f}"
+                except Exception:
+                    return "—"
+
+            if intersection is not None:
+                re_sigma = intersection.get("re_sigma")
+                omega = intersection.get("omega")
+                freq = intersection.get("frequency")
+
+                # если хоть одно поле не число — считаем, что пересечение невалидно
+                if any(v is None for v in (re_sigma, omega, freq)):
+                    self.intersection_label.setText(
+                        "Пересечение найдено, но значения невалидны (None).\n"
+                        "Проверьте диапазон/параметры или реализацию find_intersection()."
+                    )
+                else:
+                    ax.plot(
+                        re_sigma, 0,
+                        "o",
+                        color="#d62728",
+                        markersize=8,
+                        label="Пересечение Im(σ)=0",
+                    )
+                    ax.legend()
+
+                    self.intersection_label.setText(
+                        f"ω* = {fmt(omega)} рад/с\n"
+                        f"Re(σ(ω*)) = {fmt(re_sigma)}\n"
+                        f"f* = {fmt(freq)} Гц"
+                    )
             else:
                 self.intersection_label.setText(
                     "Пересечение с осью Im(σ) = 0 не найдено\n"

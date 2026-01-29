@@ -46,201 +46,78 @@ class BoreBarModel:
 
     @staticmethod
     def calculate_torsional(params: dict) -> dict:
-        """
-        Расчёт кривой D-разбиения для крутильных колебаний.
+        # строго 1000:1:15000
+        omega = np.arange(1000.0, 15000.0 + 1.0, 1.0)
 
-        Используется формула из теоретической части:
-            σ(p) = -p - λ₁ * sqrt(1 + δ₁ p) * coth( λ₂ p / sqrt(1 + δ₁ p) ),  p = i ω
+        rho = float(params["rho"])
+        G = float(params["G"])
+        Jr = float(params["Jr"])
+        Jp = float(params["Jp"])
+        delta1 = float(params["delta1"])
+        multiplier = float(params.get("multiplier", 1.0))
+        length = float(params["length"])
 
-        где:
-            λ₁ = sqrt(ρ G) * J_p / J_r,
-            λ₂ = L * sqrt(ρ / G),
-            δ₁ — коэффициент внутреннего трения (с учётом множителя).
-
-        Параметры словаря params:
-            rho      — плотность материала (кг/м³)
-            G        — модуль сдвига (Па)
-            Jp       — полярный момент инерции (м⁴)
-            Jr       — момент инерции режущей головки (кг·м²)
-            delta1   — базовый коэффициент δ₁ (с)
-            multiplier — множитель для δ₁ (1, 2, 3, 4, 6, 10)
-            length   — длина борштанги L (м)
-        """
-        rho = params["rho"]
-        G = params["G"]
-        Jp = params["Jp"]
-        Jr = params["Jr"]
-        delta1 = params["delta1"] * params["multiplier"]
-        length = params["length"]
-
-        # Параметры λ₁ и λ₂, как в работе
-        lambda1 = np.sqrt(rho * G) * Jp / Jr
-        lambda2 = length * np.sqrt(rho / G)
-
-        # Диапазон частот для построения σ(p)
-        omega = np.linspace(1000.0, 15000.0, 5000)  # рад/с
         p = 1j * omega
 
-        with np.errstate(all="ignore"):
-            expr = np.sqrt(1.0 + delta1 * p)   # sqrt(1 + δ₁ p)
-            arg = lambda2 * p / expr           # аргумент coth
-            cth = BoreBarModel._coth(arg)      # coth(arg)
-            sigma = -p - lambda1 * expr * cth  # σ(p)
+        lam1 = np.sqrt(rho * G) * Jp / Jr
+        lam2 = length * np.sqrt(rho / G)
+        d1 = delta1 * multiplier
 
-        # Убираем точки с явно «взлетевшими» значениями
-        valid = (
-            np.isfinite(sigma)
-            & (np.abs(sigma.real) < 1e8)
-            & (np.abs(sigma.imag) < 1e8)
-        )
+        # coth комплексный как в твоём коде (можно переиспользовать текущую реализацию)
+        coth = BoreBarModel._coth
+        expr = np.sqrt(1.0 + d1 * p)
+        arg = lam2 * p / expr
+        sigma = -p - lam1 * expr * coth(arg)
 
         return {
-            "omega": omega[valid],
-            "sigma_real": sigma.real[valid],
-            "sigma_imag": sigma.imag[valid],
-            "lambda1": lambda1,
-            "lambda2": lambda2,
-            "delta1": delta1,
+            "omega": omega,
+            "sigma_real": np.real(sigma),
+            "sigma_imag": np.imag(sigma),
         }
-    
+
     @staticmethod
     def find_intersection(params: dict) -> dict | None:
         """
-        Поиск точки пересечения кривой σ(p) с осью Im(σ) = 0 для крутильных колебаний.
-
-        ВАЖНО (вариант 2):
-        - ищем ВСЕ корни Im σ(iω)=0 на заданном диапазоне частот,
-        - выбираем корень с минимальной ω (низкочастотная ветка),
-        чтобы диаграмма устойчивости не "перескакивала" на другую ветку
-        (классическая проблема для L=6 и т.п.).
+        Строго как Matlab fzero:
+        - единственный bracket
         """
-        rho = params["rho"]
-        G = params["G"]
-        Jp = params["Jp"]
-        Jr = params["Jr"]
-        delta1 = params["delta1"] * params["multiplier"]
-        length = params["length"]
+        rho = float(params["rho"])
+        G = float(params["G"])
+        Jr = float(params["Jr"])
+        Jp = float(params["Jp"])
+        delta1 = float(params["delta1"])
+        multiplier = float(params.get("multiplier", 1.0))
+        length = float(params["length"])
 
-        lambda1 = np.sqrt(rho * G) * Jp / Jr
-        lambda2 = length * np.sqrt(rho / G)
+        lam1 = np.sqrt(rho * G) * Jp / Jr
+        lam2 = length * np.sqrt(rho / G)
+        d1 = delta1 * multiplier
 
-        def im_sigma(omega_val: float) -> float:
-            """
-            Мнимая часть σ(i ω). Если точка численно плохая — возвращаем NaN.
-            """
-            p_val = 1j * omega_val
-            with np.errstate(all="ignore"):
-                expr = np.sqrt(1.0 + delta1 * p_val)
-                arg = lambda2 * p_val / expr
-                cth = BoreBarModel._coth(arg)
-                sigma_val = -p_val - lambda1 * expr * cth
-                val = np.imag(sigma_val)
+        def im_sigma(w: float) -> float:
+            p = 1j * w
+            expr = np.sqrt(1.0 + d1 * p)
+            arg = lam2 * p / expr
+            s = -p - lam1 * expr * BoreBarModel._coth(arg)
+            return float(np.imag(s))
 
-            # brentq не любит inf/nan
-            if not np.isfinite(val):
-                return np.nan
-            return float(val)
+        # строгие брекеты как в исследовании
+        bracket = (500.0, 1000.0) if abs(length - 6.0) < 1e-12 else (500.0, 2000.0)
 
-        try:
-            # Диапазоны как раньше, но теперь внутри каждого ищем все смены знака
-            intervals = [(500.0, 2000.0), (2000.0, 5000.0), (5000.0, 10000.0), (10000.0, 20000.0)]
-
-            roots: list[float] = []
-
-            for a, b in intervals:
-                # Плотность сетки: можно увеличить, если хочешь ещё устойчивее ловить корни
-                grid_n = 800  # достаточно, чтобы не "перепрыгивать" через корни
-                omega_grid = np.linspace(a, b, grid_n)
-
-                vals = np.array([im_sigma(w) for w in omega_grid], dtype=float)
-                finite = np.isfinite(vals)
-
-                if np.count_nonzero(finite) < 2:
-                    continue
-
-                # Берём только финитные точки
-                w = omega_grid[finite]
-                v = vals[finite]
-
-                # Кандидаты на "почти ноль" (редко, но бывает)
-                med = np.median(np.abs(v)) if v.size > 0 else 1.0
-                zero_tol = max(1e-9, 1e-6 * med)
-
-                near_zero_idx = np.where(np.abs(v) <= zero_tol)[0]
-                for idx in near_zero_idx:
-                    roots.append(float(w[idx]))
-
-                # Поиск смены знака между соседними точками
-                s = np.sign(v)
-                # нули заменяем на знак ближайшего (чтобы не рвать массив)
-                for i in range(1, len(s)):
-                    if s[i] == 0:
-                        s[i] = s[i - 1] if s[i - 1] != 0 else 1.0
-
-                sign_changes = np.where(s[:-1] * s[1:] < 0)[0]
-
-                for idx in sign_changes:
-                    left_w = float(w[idx])
-                    right_w = float(w[idx + 1])
-
-                    # На всякий случай проверим значения
-                    f_left = im_sigma(left_w)
-                    f_right = im_sigma(right_w)
-                    if not (np.isfinite(f_left) and np.isfinite(f_right)):
-                        continue
-                    if f_left == 0.0:
-                        roots.append(left_w)
-                        continue
-                    if f_right == 0.0:
-                        roots.append(right_w)
-                        continue
-                    if f_left * f_right > 0:
-                        continue
-
-                    try:
-                        sol = root_scalar(im_sigma, bracket=(left_w, right_w), method="brentq")
-                        if sol.converged and np.isfinite(sol.root):
-                            roots.append(float(sol.root))
-                    except Exception:
-                        continue
-
-            if not roots:
-                return None
-
-            # Уникализируем и берём минимальную ω (низкочастотная ветка)
-            roots = sorted(r for r in roots if r > 0 and np.isfinite(r))
-
-            unique_roots: list[float] = []
-            for r in roots:
-                if not unique_roots:
-                    unique_roots.append(r)
-                else:
-                    prev = unique_roots[-1]
-                    # относительный допуск на одинаковые корни
-                    if abs(r - prev) > 1e-6 * (1.0 + abs(prev)):
-                        unique_roots.append(r)
-
-            omega_cross = unique_roots[0]
-
-            # Вычисляем Re σ(ω*) в найденной точке
-            p_cross = 1j * omega_cross
-            with np.errstate(all="ignore"):
-                expr = np.sqrt(1.0 + delta1 * p_cross)
-                arg = lambda2 * p_cross / expr
-                cth = BoreBarModel._coth(arg)
-                sigma_cross = -p_cross - lambda1 * expr * cth
-
-            if not (np.isfinite(sigma_cross.real) and np.isfinite(sigma_cross.imag)):
-                return None
-
-            return {
-                "omega": float(omega_cross),
-                "re_sigma": float(np.real(sigma_cross)),
-                "frequency": float(omega_cross / (2.0 * np.pi)),  # Гц
-            }
-
-        except Exception:
+        sol = root_scalar(im_sigma, bracket=bracket, method="brentq")
+        if not sol.converged:
             return None
+
+        omega_cross = float(sol.root)
+        p = 1j * omega_cross
+        expr = np.sqrt(1.0 + d1 * p)
+        arg = lam2 * p / expr
+        sigma_val = -p - lam1 * expr * BoreBarModel._coth(arg)
+
+        return {
+            "omega": omega_cross,
+            "re_sigma": float(np.real(sigma_val)),
+            "frequency": omega_cross / (2.0 * np.pi),
+        }
         
     @staticmethod
     def find_critical_delta1(params: dict) -> dict | None:
