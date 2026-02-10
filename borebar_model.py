@@ -405,8 +405,8 @@ class BoreBarModel:
         phi_vals = phi(x_grid)
         phi_pp_vals = phi_pp(x_grid)
 
-        alpha = m * np.trapz(phi_vals**2, x_grid)
-        gamma = E * J * np.trapz(phi_pp_vals**2, x_grid)
+        alpha = m * np.trapezoid(phi_vals**2, x_grid)
+        gamma = E * J * np.trapezoid(phi_pp_vals**2, x_grid)
 
         # Диапазон частот (как в Maple-примере, 0..220 рад/с)
         omega = np.linspace(0.0, 220.0, 2000)
