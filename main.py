@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import sys
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QFont
@@ -9,4 +10,14 @@ if __name__ == "__main__":
     app.setFont(font)
     window = MainWindow()
     window.show()
+=======
+import sys
+from PyQt5.QtWidgets import QApplication
+from borebar_gui import BoreBarGUI
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = BoreBarGUI()
+    window.show()
+>>>>>>> origin/master
     sys.exit(app.exec_())
