@@ -83,3 +83,85 @@ def test_torsional_intersection_exists_and_in_expected_range(model):
     assert 500.0 < omega_star < 20000.0
     assert np.isfinite(inter["re_sigma"])
     assert np.isfinite(inter["frequency"])
+
+def test_torsional_real_part_range_diagnostics(model):
+    """
+    Диагностика: смотрим диапазон Re(σ).
+    Этот тест не проверяет теорию,
+    а помогает понять масштаб графика.
+    """
+    params = dict(
+        rho=7800.0,
+        G=8.0e10,
+        Jr=2.57e-2,
+        Jp=1.9e-5,
+        delta1=3.44e-6,
+        multiplier=1,
+        length=3.0,
+        omega_start=1000.0,
+        omega_end=15000.0,
+        omega_step=1.0,
+    )
+
+    res = model.calculate_torsional(params)
+
+    re_sigma = np.asarray(res["sigma_real"], dtype=float)
+
+    re_min = np.nanmin(re_sigma)
+    re_max = np.nanmax(re_sigma)
+
+    print("\nRe(σ) min =", re_min)
+    print("Re(σ) max =", re_max)
+
+    # sanity-проверки
+    assert re_min < 0
+    assert re_max > re_min
+
+def test_torsional_real_part_diagnostics(model):
+    """
+    Диагностика крутильных колебаний:
+    вывод Re(σ) в точках пересечения Im(σ)=0.
+    """
+
+    params = dict(
+        rho=7800.0,
+        G=8.0e10,
+        Jr=2.57e-2,
+        Jp=1.9e-5,
+        delta1=3.44e-6,
+        multiplier=1,
+        length=3.0,
+        omega_start=1000.0,
+        omega_end=15000.0,
+        omega_step=1.0,
+    )
+
+    res = model.calculate_torsional(params)
+
+    omega = np.asarray(res["omega"], dtype=float)
+    sigma_re = np.asarray(res["sigma_real"], dtype=float)
+    sigma_im = np.asarray(res["sigma_imag"], dtype=float)
+
+    # ищем смену знака Im(σ)
+    sign_changes = np.where(np.diff(np.sign(sigma_im)) != 0)[0]
+
+    print("\n===== Крутильные =====")
+    print("Количество пересечений Im(σ)=0:", len(sign_changes))
+
+    assert len(sign_changes) > 0
+
+    for idx in sign_changes:
+        omega_star = omega[idx]
+        re_star = sigma_re[idx]
+        im_star = sigma_im[idx]
+        f_star = omega_star / (2 * np.pi)
+
+        print("omega* =", omega_star, "рад/с")
+        print("f* =", f_star, "Гц")
+        print("Re(σ*) =", re_star)
+        print("Im(σ*) ≈", im_star)
+        print("----------------------")
+
+        # базовая проверка
+        assert np.isfinite(re_star)
+        assert np.isfinite(im_star)

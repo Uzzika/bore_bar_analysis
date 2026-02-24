@@ -270,6 +270,7 @@ class BoreBarGUI(QMainWindow):
         self._create_geometry_group()
         self._create_transverse_group()
         self._create_friction_group()
+        self._create_frequency_group()
         self._create_presets_group()
         self._create_params_buttons()
         self._create_intersection_panel()
@@ -832,6 +833,9 @@ class BoreBarGUI(QMainWindow):
             "K_cut": self.K_cut_spin.value(),
             "h": self.h_spin.value(),
             "beta": self.beta_spin.value(),
+            "omega_start": self.omega_start_spin.value(),
+            "omega_end": self.omega_end_spin.value(),
+            "omega_step": self.omega_step_spin.value(),
         }
 
     def _save_parameters(self):
@@ -949,6 +953,62 @@ class BoreBarGUI(QMainWindow):
             ax.grid(True, linestyle=":", alpha=0.7)
 
             intersection = self.model.find_intersection(params)
+            
+            im0 = self.model.find_torsional_im0_points(params)
+            points = im0.get("points", [])
+            crit = im0.get("critical")
+
+            # все пересечения Im=0
+            if points:
+                ax.plot(
+                    [p["re"] for p in points],
+                    [0.0] * len(points),
+                    "o",
+                    markersize=4,
+                    label="Все Im(σ)=0"
+                )
+
+            # критическая (min Re)
+            if crit is not None:
+                ax.plot(
+                    crit["re"], 0.0,
+                    "o",
+                    markersize=9,
+                    label="Критическая (min Re)"
+                )
+            # --- ВСЕ пересечения Im(σ)=0 + критическая (min Re) ---
+            all_pts = self.model.find_torsional_im0_points(params)
+            pts = all_pts.get("points", [])
+            crit = all_pts.get("critical")
+
+            if pts:
+                # все точки: маленькие кружки
+                ax.plot(
+                    [p["re"] for p in pts],
+                    [0.0 for _ in pts],
+                    "o",
+                    markersize=4,
+                    label="Все пересечения Im(σ)=0",
+                )
+
+            if crit is not None:
+                # критическая: крупная звезда
+                ax.plot(
+                    crit["re"], 0.0,
+                    marker="*",
+                    markersize=14,
+                    label="Критическая (min Re при Im=0)",
+                )
+
+                self.intersection_label.setText(
+                    f"Критическая точка (min Re при Im=0):\n"
+                    f"ω* = {crit['omega']:.3f} рад/с\n"
+                    f"f* = {crit['frequency']:.3f} Гц\n"
+                    f"Re(σ*) = {crit['re']:.6g}\n"
+                    f"Количество пересечений: {len(pts)}"
+                )
+
+            ax.legend()
 
             def fmt(x, nd=2):
                 try:
@@ -1022,6 +1082,41 @@ class BoreBarGUI(QMainWindow):
             ax.plot(K1_MN, delta_kNs, color="#2ca02c", linewidth=1.5)
             ax.axhline(0, color="black", linestyle="--", linewidth=0.7)
 
+            # --- ВСЕ пересечения δ=0 + критическая (min K1) ---
+            all_pts = self.model.find_longitudinal_delta0_points(params)
+            pts = all_pts.get("points", [])
+            crit = all_pts.get("critical")
+
+            # переводим для графика: K1 -> МН/м, delta -> кН·с/м
+            if pts:
+                ax.plot(
+                    [p["K1"] / 1e6 for p in pts],
+                    [0.0 for _ in pts],
+                    "o",
+                    markersize=4,
+                    label="Все пересечения δ=0",
+                )
+
+            if crit is not None:
+                ax.plot(
+                    crit["K1"] / 1e6, 0.0,
+                    marker="*",
+                    markersize=14,
+                    label="Критическая (min K1 при δ=0)",
+                )
+
+                # добавим в текстовый блок
+                self.longitudinal_info_label.setText(
+                    self.longitudinal_info_label.text()
+                    + "\n\n"
+                    + "Критическая точка (δ=0, min K₁):\n"
+                    + f"ω* ≈ {crit['omega']:.3f} рад/с\n"
+                    + f"K₁* ≈ {crit['K1']:.6g} Н/м\n"
+                    + f"Количество пересечений δ=0: {len(pts)}"
+                )
+
+            ax.legend()
+
             ax.set_title("Продольные колебания: кривая D-разбиения K₁–δ")
             ax.set_xlabel("K₁, МН/м")
             ax.set_ylabel("δ, кН·с/м")
@@ -1063,6 +1158,39 @@ class BoreBarGUI(QMainWindow):
             ax.plot(result["W_real"], result["W_imag"], color="#9467bd", linewidth=1.5)
             ax.axhline(0, color="red", linestyle="--", linewidth=0.7)
             ax.axvline(0, color="red", linestyle="--", linewidth=0.7)
+
+            # --- ВСЕ пересечения Im(W)=0 + критическая (min Re) ---
+            all_pts = self.model.find_transverse_im0_points(params)
+            pts = all_pts.get("points", [])
+            crit = all_pts.get("critical")
+
+            if pts:
+                ax.plot(
+                    [p["re"] for p in pts],
+                    [0.0 for _ in pts],
+                    "o",
+                    markersize=4,
+                    label="Все пересечения Im(W)=0",
+                )
+
+            if crit is not None:
+                ax.plot(
+                    crit["re"], 0.0,
+                    marker="*",
+                    markersize=14,
+                    label="Критическая (min Re при Im=0)",
+                )
+
+                self.transverse_info_label.setText(
+                    self.transverse_info_label.text()
+                    + "\n\n"
+                    + "Критическая точка (Im(W)=0, min Re):\n"
+                    + f"ω* ≈ {crit['omega']:.3f} рад/с\n"
+                    + f"Re(W*) ≈ {crit['re']:.6g}\n"
+                    + f"Количество пересечений: {len(pts)}"
+                )
+
+            ax.legend()
 
             ax.set_title("Поперечные колебания: годограф W(p)")
             ax.set_xlabel("Re(W)")
@@ -1572,6 +1700,49 @@ class BoreBarGUI(QMainWindow):
             "Курсовая работа, ФИИТ-4 курс."
         )
         QMessageBox.about(self, "О программе", text)
+
+    def _create_frequency_group(self):
+        group = QGroupBox("Диапазон частот")
+
+        layout = QVBoxLayout(group)
+
+        layout.addWidget(
+            self._create_labeled_spinbox(
+                "Начальная частота ω₀ (рад/с):",
+                "omega_start",
+                default=0.0,
+                minimum=0.0,
+                maximum=50000.0,
+                step=1.0,
+                decimals=3,
+            )
+        )
+
+        layout.addWidget(
+            self._create_labeled_spinbox(
+                "Конечная частота ω (рад/с):",
+                "omega_end",
+                default=15000.0,
+                minimum=1.0,
+                maximum=100000.0,
+                step=1.0,
+                decimals=3,
+            )
+        )
+
+        layout.addWidget(
+            self._create_labeled_spinbox(
+                "Шаг Δω (рад/с):",
+                "omega_step",
+                default=1.0,
+                minimum=0.0001,
+                maximum=1000.0,
+                step=0.1,
+                decimals=4,
+            )
+        )
+
+        self.params_layout.addWidget(group)
 
 
 if __name__ == "__main__":
