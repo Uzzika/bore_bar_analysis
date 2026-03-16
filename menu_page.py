@@ -9,6 +9,9 @@ from PyQt5.QtGui import QFont
 
 
 class MenuPage(QWidget):
+    def close_application(self):
+        self.main_window.close()
+
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
@@ -55,9 +58,14 @@ class MenuPage(QWidget):
             lambda: main_window.switch(main_window.algorithm_page)
         )
 
+        btn_exit = self._create_button(
+            "Выход",
+            self.close_application
+        )
+
         menu_font = QFont("Inter", 12)
 
-        for btn in [btn_torsional, btn_longitudinal, btn_transverse, btn_help, btn_algo]:
+        for btn in [btn_torsional, btn_longitudinal, btn_transverse, btn_help, btn_algo, btn_exit]:
             btn.setFont(menu_font)
 
         layout.addWidget(btn_torsional)
@@ -66,6 +74,7 @@ class MenuPage(QWidget):
         layout.addSpacing(10)
         layout.addWidget(btn_help)
         layout.addWidget(btn_algo)
+        layout.addWidget(btn_exit)
 
         self.setLayout(layout)
 

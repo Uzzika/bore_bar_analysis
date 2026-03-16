@@ -13,8 +13,7 @@ from borebar_model import BoreBarModel  # теперь найдётся
 
 @pytest.fixture
 def model():
-    # у тебя модель статическая — можно возвращать класс
-    return BoreBarModel
+    return BoreBarModel()
 
 
 def assert_finite_array(arr, *, allow_nan=False):

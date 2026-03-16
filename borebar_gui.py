@@ -1083,7 +1083,7 @@ class BoreBarGUI(QMainWindow):
             ax.axhline(0, color="black", linestyle="--", linewidth=0.7)
 
             # --- ВСЕ пересечения δ=0 + критическая (min K1) ---
-            all_pts = self.model.find_longitudinal_delta0_points(params)
+            all_pts = self.model.ffind_longitudinal_im0_points(params)
             pts = all_pts.get("points", [])
             crit = all_pts.get("critical")
 
@@ -1361,21 +1361,27 @@ class BoreBarGUI(QMainWindow):
         file_format = "json" if selected_filter.startswith("JSON") else "csv"
         params = self._get_current_parameters()
 
+        # ---- точки пересечения ----
+        tors_pts, tors_crit = self.model.find_torsional_im0_points(params)
+        long_pts, long_crit = self.model.find_longitudinal_im0_points(params)
+        trans_pts, trans_crit = self.model.find_transverse_im0_points(params)
+
         torsional = self.model.calculate_torsional(params)
         longitudinal = self.model.calculate_longitudinal(params)
 
         data = {
-            "parameters": params,
-            "torsional": {
-                "omega": torsional["omega"].tolist(),
-                "sigma_real": torsional["sigma_real"].tolist(),
-                "sigma_imag": torsional["sigma_imag"].tolist(),
-            },
-            "longitudinal": {
-                "omega": longitudinal["omega"].tolist(),
-                "K1": longitudinal["K1"].tolist(),
-                "delta": longitudinal["delta"].tolist(),
-            },
+            "params": params,
+            "torsional_curve": torsional,
+            "longitudinal_curve": longitudinal,
+
+            "torsional_im0_points": tors_pts,
+            "torsional_critical": tors_crit,
+
+            "longitudinal_delta0_points": long_pts,
+            "longitudinal_critical": long_crit,
+
+            "transverse_im0_points": trans_pts,
+            "transverse_critical": trans_crit
         }
 
         try:
@@ -1391,25 +1397,42 @@ class BoreBarGUI(QMainWindow):
                     for key, value in params.items():
                         writer.writerow([key, f"{value:.6g}"])
 
+                    # ---- Точки пересечения: Крутильные ----
                     writer.writerow([])
-                    writer.writerow(["# Крутильные колебания"])
-                    writer.writerow(["omega, рад/с", "Re(sigma)", "Im(sigma)"])
-                    for w, sr, si in zip(
-                        torsional["omega"],
-                        torsional["sigma_real"],
-                        torsional["sigma_imag"],
-                    ):
-                        writer.writerow([f"{w:.6g}", f"{sr:.6g}", f"{si:.6g}"])
+                    writer.writerow(["# Точки Im(σ)=0 (крутильные)"])
+                    writer.writerow(["omega", "Re", "Im", "f(Hz)"])
 
+                    for p in tors_pts:
+                        writer.writerow([
+                            p["omega"],
+                            p["re"],
+                            0.0,
+                            p["omega"] / (2 * np.pi)
+                        ])
+
+                    # ---- Точки пересечения: Продольные ----
                     writer.writerow([])
-                    writer.writerow(["# Продольные колебания"])
-                    writer.writerow(["omega, рад/с", "K1, Н/м", "delta, Н·с/м"])
-                    for w, k1, dlt in zip(
-                        longitudinal["omega"],
-                        longitudinal["K1"],
-                        longitudinal["delta"],
-                    ):
-                        writer.writerow([f"{w:.6g}", f"{k1:.6g}", f"{dlt:.6g}"])
+                    writer.writerow(["# Точки δ=0 (продольные)"])
+                    writer.writerow(["omega", "K1 (=Re)", "delta"])
+
+                    for p in long_pts:
+                        writer.writerow([
+                            p["omega"],
+                            p["K1"],
+                            0.0
+                        ])
+
+                    # ---- Точки пересечения: Поперечные ----
+                    writer.writerow([])
+                    writer.writerow(["# Точки Im(W)=0 (поперечные)"])
+                    writer.writerow(["omega", "Re(W)", "Im(W)"])
+
+                    for p in trans_pts:
+                        writer.writerow([
+                            p["omega"],
+                            p["re"],
+                            0.0
+                        ])
 
             self.status_bar.showMessage(f"Результаты экспортированы в {filename}", 5000)
             QMessageBox.information(self, "Экспорт завершён", "Результаты успешно сохранены.")

@@ -1,4 +1,5 @@
 from PyQt5.QtWidgets import (
+    QComboBox,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -10,6 +11,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from borebar_model import BoreBarModel
 import numpy as np
+from presets import get_presets
 
 
 class LongitudinalPage(QWidget):
@@ -19,8 +21,6 @@ class LongitudinalPage(QWidget):
         self.model = BoreBarModel()
 
         layout = QHBoxLayout()
-
-        # ---------- Левая панель ----------
         left = QVBoxLayout()
 
         self.E_input = QLineEdit("2e11")
@@ -61,7 +61,24 @@ class LongitudinalPage(QWidget):
 
         left.addWidget(analyze_btn)
         left.addWidget(back_btn)
+        
+        self.export_button = QPushButton("Экспорт результатов")
+        self.export_button.clicked.connect(self.export_results)
+        left.addWidget(self.export_button)
+
+        # --- пресеты ---
+        self.presets = get_presets()
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("Выберите пресет")
+        self.preset_combo.addItems(self.presets.keys())
+        self.preset_combo.currentTextChanged.connect(self.apply_preset)
+
+        left.addWidget(QLabel("Типовые режимы:"))
+        left.addWidget(self.preset_combo)
+
         left.addStretch()
+
         left.addWidget(QLabel("Начальная частота ω₀ (рад/с)"))
         left.addWidget(self.omega_start_input)
 
@@ -71,17 +88,15 @@ class LongitudinalPage(QWidget):
         left.addWidget(QLabel("Шаг Δω"))
         left.addWidget(self.omega_step_input)
 
-        # ---------- Правая часть (график) ----------
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
 
         layout.addLayout(left, 1)
         layout.addWidget(self.canvas, 3)
-
         self.setLayout(layout)
 
-    def run_analysis(self):
-        params = {
+    def get_parameters(self):
+        return {
             "E": float(self.E_input.text()),
             "rho": float(self.rho_input.text()),
             "S": float(self.S_input.text()),
@@ -91,7 +106,12 @@ class LongitudinalPage(QWidget):
             "omega_start": float(self.omega_start_input.text()),
             "omega_end": float(self.omega_end_input.text()),
             "omega_step": float(self.omega_step_input.text()),
-        }
+    }
+
+    # -----------------------------------------------------------------
+
+    def run_analysis(self):
+        params = self.get_parameters()
 
         result = self.model.calculate_longitudinal(params)
 
@@ -100,33 +120,23 @@ class LongitudinalPage(QWidget):
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-
         ax.plot(K1, delta)
-
-        # === Поиск пересечений δ = 0 ===
         im0 = self.model.find_longitudinal_im0_points(params)
-        points = im0.get("points", [])
-        crit = im0.get("critical")
 
-        # Все пересечения
+        if isinstance(im0, tuple):
+            points, crit = im0
+        else:
+            points = im0.get("points", [])
+            crit = im0.get("critical")
+
         if points:
-            ax.plot(
-                [p["re"] / 1e6 for p in points],     # K1
-                [0] * len(points),            # δ = 0
-                "o",
-                markersize=5,
-                label="δ = 0"
-            )
+            ax.plot([p["re"]/1e6 for p in points],
+                    [0]*len(points),
+                    "o", markersize=5, label="δ=0")
 
-        # Критическая точка (минимальный K1)
         if crit:
-            ax.plot(
-                crit["re"] / 1e6,
-                0,
-                "o",
-                markersize=9,
-                label="Критическая"
-            )
+            ax.plot(crit["re"]/1e6, 0,
+                    "o", markersize=9, label="Критическая")
 
         ax.legend()
         ax.set_title("Продольные колебания: кривая K₁–δ")
@@ -135,3 +145,96 @@ class LongitudinalPage(QWidget):
         ax.grid(True)
 
         self.canvas.draw()
+
+    # -----------------------------------------------------------------
+
+    def apply_preset(self, name):
+        if name not in self.presets:
+            return
+
+        preset = self.presets[name]
+
+        mapping = {
+            "length": self.length_input,
+            "mu": self.mu_input,
+            "tau": self.tau_input,
+        }
+
+        for key, widget in mapping.items():
+            if key in preset:
+                widget.setText(str(preset[key]))
+
+    def export_results(self):
+        from PyQt5.QtWidgets import QFileDialog
+        import json
+        import csv
+        import numpy as np
+
+        params = self.get_parameters()
+
+        # ---- расчёты ----
+        omega = np.linspace(1, 5000, 5000)
+        K1, delta = self.model.compute_longitudinal_curve(params, omega)
+
+        im0 = self.model.find_longitudinal_im0_points(params)
+        if isinstance(im0, tuple):
+            points, critical = im0
+        else:
+            points = im0.get("points", [])
+            critical = im0.get("critical")
+
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить продольные результаты",
+            "",
+            "JSON (*.json);;CSV (*.csv)"
+        )
+
+        if not filename:
+            return
+
+        file_format = "json" if selected_filter.startswith("JSON") else "csv"
+
+        # ================= JSON =================
+        if file_format == "json":
+            data = {
+                "params": params,
+                "curve": [
+                    {"omega": float(o), "K1": float(k), "delta": float(d)}
+                    for o, k, d in zip(omega, K1, delta)
+                ],
+                "delta0_points": points,
+                "critical_point": critical
+            }
+
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+
+        # ================= CSV =================
+        else:
+            with open(filename, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+
+                writer.writerow(["omega", "K1", "delta"])
+                for o, k, d in zip(omega, K1, delta):
+                    writer.writerow([o, k, d])
+
+                writer.writerow([])
+                writer.writerow(["# Точки пересечения δ = 0"])
+                writer.writerow(["omega*", "K1*", "delta"])
+
+                for p in points:
+                    writer.writerow([
+                        p["omega"],
+                        p["K1"],
+                        0.0
+                    ])
+
+                if critical:
+                    writer.writerow([])
+                    writer.writerow(["# Критическая точка"])
+                    writer.writerow([
+                        critical["omega"],
+                        critical["K1"],
+                        0.0
+                    ])

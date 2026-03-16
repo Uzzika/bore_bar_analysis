@@ -1,4 +1,5 @@
 from PyQt5.QtWidgets import (
+    QComboBox,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -10,6 +11,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from borebar_model import BoreBarModel
 import numpy as np
+from presets import get_presets
 
 
 class TransversePage(QWidget):
@@ -73,7 +75,24 @@ class TransversePage(QWidget):
 
         left.addWidget(analyze_btn)
         left.addWidget(back_btn)
+        
+        self.export_button = QPushButton("Экспорт результатов")
+        self.export_button.clicked.connect(self.export_results)
+        left.addWidget(self.export_button)
+
+        # ---------- Пресеты (под кнопкой назад) ----------
+        self.presets = get_presets()
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("Выберите пресет")
+        self.preset_combo.addItems(self.presets.keys())
+        self.preset_combo.currentTextChanged.connect(self.apply_preset)
+
+        left.addWidget(QLabel("Типовые режимы:"))
+        left.addWidget(self.preset_combo)
+
         left.addStretch()
+
         left.addWidget(QLabel("Начальная частота ω₀ (рад/с)"))
         left.addWidget(self.omega_start_input)
 
@@ -92,6 +111,11 @@ class TransversePage(QWidget):
 
         self.setLayout(layout)
 
+    # ---------------------------------------------------------------------
+    def get_parameters(self) -> dict:
+        """Возвращает текущие параметры страницы для экспорта."""
+        return self._get_current_parameters()
+    
     def run_analysis(self):
         params = {
             "E": float(self.E_input.text()),
@@ -120,7 +144,6 @@ class TransversePage(QWidget):
         points = im0.get("points", [])
         crit = im0.get("critical")
 
-        # Все пересечения
         if points:
             ax.plot(
                 [p["re"] for p in points],
@@ -130,7 +153,6 @@ class TransversePage(QWidget):
                 label="Im(W)=0"
             )
 
-        # Критическая точка (минимальный Re)
         if crit:
             ax.plot(
                 crit["re"],
@@ -141,7 +163,6 @@ class TransversePage(QWidget):
             )
 
         ax.legend()
-
         ax.axhline(0, linestyle="--")
         ax.axvline(0, linestyle="--")
 
@@ -152,3 +173,100 @@ class TransversePage(QWidget):
         ax.grid(True)
 
         self.canvas.draw()
+
+    # ---------------------------------------------------------------------
+
+    def apply_preset(self, name):
+        if name not in self.presets:
+            return
+
+        preset = self.presets[name]
+
+        mapping = {
+            "E": self.E_input,
+            "rho": self.rho_input,
+            "length": self.length_input,
+            "mu": self.mu_input,
+            "tau": self.tau_input,
+            "R": self.R_input,
+            "r": self.r_input,
+            "K_cut": self.K_input,
+            "beta": self.beta_input,
+            "omega_start": self.omega_start_input,
+            "omega_end": self.omega_end_input,
+            "omega_step": self.omega_step_input,
+        }
+
+        for key, widget in mapping.items():
+            if key in preset:
+                widget.setText(str(preset[key]))
+    
+    def export_results(self):
+        from PyQt5.QtWidgets import QFileDialog
+        import json
+        import csv
+        import numpy as np
+
+        params = self.get_parameters()
+
+        # ---- расчёты ----
+        omega = np.linspace(1, 5000, 5000)
+        re_w, im_w = self.model.compute_transverse_curve(params, omega)
+
+        points, critical = self.model.find_transverse_im0_points(params)
+
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить поперечные результаты",
+            "",
+            "JSON (*.json);;CSV (*.csv)"
+        )
+
+        if not filename:
+            return
+
+        file_format = "json" if selected_filter.startswith("JSON") else "csv"
+
+        # ================= JSON =================
+        if file_format == "json":
+            data = {
+                "params": params,
+                "curve": [
+                    {"omega": float(o), "Re(W)": float(r), "Im(W)": float(i)}
+                    for o, r, i in zip(omega, re_w, im_w)
+                ],
+                "im0_points": points,
+                "critical_point": critical
+            }
+
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+
+        # ================= CSV =================
+        else:
+            with open(filename, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+
+                writer.writerow(["omega", "Re(W)", "Im(W)"])
+                for o, r, i in zip(omega, re_w, im_w):
+                    writer.writerow([o, r, i])
+
+                writer.writerow([])
+                writer.writerow(["# Точки пересечения Im(W) = 0"])
+                writer.writerow(["omega*", "Re(W)*", "Im(W)"])
+
+                for p in points:
+                    writer.writerow([
+                        p["omega"],
+                        p["re"],
+                        0.0
+                    ])
+
+                if critical:
+                    writer.writerow([])
+                    writer.writerow(["# Критическая точка"])
+                    writer.writerow([
+                        critical["omega"],
+                        critical["re"],
+                        0.0
+                    ])

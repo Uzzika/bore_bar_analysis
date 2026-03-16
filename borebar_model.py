@@ -28,17 +28,36 @@ class BoreBarModel:
     # -------------------------------------------------------------------------
     # Вспомогательные функции
     # -------------------------------------------------------------------------
-
-    @staticmethod
-    def _coth(z: np.ndarray) -> np.ndarray:
+    
+    def _find_zero_crossings(self, y: np.ndarray):
         """
-        Численно устойчивое вычисление гиперболического котангенса:
-            coth(z) = 1 / tanh(z)
-
-        Работает и для комплексных аргументов.
+        Возвращает индексы, где функция меняет знак.
+        Используется для поиска пересечений Im = 0.
         """
-        with np.errstate(all="ignore"):
-            return 1.0 / np.tanh(z)
+        y = np.asarray(y)
+        sign = np.sign(y)
+        sign[sign == 0] = 1
+        return np.where(np.diff(sign) != 0)[0]
+    
+    def _coth(z):
+        """
+        Численно устойчивая coth(z).
+        Для |z| -> 0 используем разложение:
+            coth(z) ≈ 1/z + z/3
+        """
+        z = np.asarray(z)
+        eps = 1e-8
+        small = np.abs(z) < eps
+
+        out = np.empty_like(z, dtype=complex)
+
+        # Малые аргументы — разложение
+        out[small] = 1.0 / z[small] + z[small] / 3.0
+
+        # Остальные — стандартная формула
+        out[~small] = 1.0 / np.tanh(z[~small])
+
+        return out
         
     @staticmethod
     def _sign_change_intervals(x: np.ndarray, y: np.ndarray) -> list[tuple[int, int]]:
@@ -81,40 +100,72 @@ class BoreBarModel:
         return x1 - y1 * (x2 - x1) / (y2 - y1)
     # -------------------------------------------------------------------------
     # Крутильные колебания
+    
     # -------------------------------------------------------------------------
-
-    @staticmethod
-    def calculate_torsional(params: dict) -> dict:
-        omega_start = float(params.get("omega_start", 0.0))
-        omega_end = float(params.get("omega_end", 15000.0))
-        omega_step = float(params.get("omega_step", 1.0))
-
-        omega = np.arange(omega_start, omega_end + omega_step, omega_step)
+    
+    def calculate_torsional(self, params: dict):
+        """
+        Крутильные колебания.
+        Возвращает словарь:
+            {
+                "omega": ...,
+                "sigma_real": ...,
+                "sigma_imag": ...
+            }
+        Строго по формуле исследования.
+        """
 
         rho = float(params["rho"])
         G = float(params["G"])
-        Jr = float(params["Jr"])
         Jp = float(params["Jp"])
+        Jr = float(params["Jr"])
+        L = float(params["length"])
         delta1 = float(params["delta1"])
-        multiplier = float(params.get("multiplier", 1.0))
-        length = float(params["length"])
+
+        omega_full = np.arange(
+            float(params["omega_start"]),
+            float(params["omega_end"]),
+            float(params["omega_step"]),
+            dtype=float
+        )
+
+        # всегда считаем только ω > 0 (отрицательные будут дозеркалены в GUI при необходимости)
+        omega = omega_full[omega_full > 0]
+        if omega.size == 0:
+            return {"omega": omega_full, "sigma_real": np.array([]), "sigma_imag": np.array([])}
 
         p = 1j * omega
 
         lam1 = np.sqrt(rho * G) * Jp / Jr
-        lam2 = length * np.sqrt(rho / G)
-        d1 = delta1 * multiplier
+        lam2 = L * np.sqrt(rho / G)
 
-        # coth комплексный как в твоём коде (можно переиспользовать текущую реализацию)
-        coth = BoreBarModel._coth
-        expr = np.sqrt(1.0 + d1 * p)
+        expr = np.sqrt(1.0 + delta1 * p)
         arg = lam2 * p / expr
-        sigma = -p - lam1 * expr * coth(arg)
+        
+        arg_min = float(params.get("arg_min", 0.0))
+        if arg_min > 0:
+            bad = np.abs(arg) < arg_min
+        else:
+            bad = np.zeros_like(arg, dtype=bool)
+
+        # устойчивая coth
+        def stable_coth(z):
+            z = np.asarray(z)
+            out = np.empty_like(z, dtype=complex)
+            small = np.abs(z) < 1e-8
+
+            out[small] = 1.0 / z[small] + z[small] / 3.0
+            out[~small] = np.cosh(z[~small]) / np.sinh(z[~small])
+
+            return out
+
+        sigma = -p - lam1 * expr * stable_coth(arg)
+        sigma[bad] = np.nan + 1j*np.nan
 
         return {
             "omega": omega,
-            "sigma_real": np.real(sigma),
-            "sigma_imag": np.imag(sigma),
+            "sigma_real": sigma.real,
+            "sigma_imag": sigma.imag,
         }
     
     @staticmethod
@@ -124,7 +175,8 @@ class BoreBarModel:
         и выбирает критическую точку: Re минимальное среди пересечений.
         """
         # 1) посчитать кривую
-        res = BoreBarModel.calculate_torsional(params)
+        model = BoreBarModel()
+        res = model.calculate_torsional(params)
         omega = np.asarray(res["omega"], dtype=float)
         sig_re = np.asarray(res["sigma_real"], dtype=float)
         sig_im = np.asarray(res["sigma_imag"], dtype=float)
@@ -397,64 +449,118 @@ class BoreBarModel:
             "a": a,
         }
 
-    @staticmethod
-    def find_longitudinal_im0_points(params: dict) -> dict:
-        res = BoreBarModel.calculate_longitudinal(params)
-        omega = np.asarray(res["omega"], dtype=float)
-        K1 = np.asarray(res["K1"], dtype=float)
-        delta = np.asarray(res["delta"], dtype=float)
+    def compute_longitudinal_curve(self, params: dict, omega: np.ndarray):
+        """Вернуть массивы (K1(ω), δ(ω)) для заданного omega.
 
-        intervals = BoreBarModel._sign_change_intervals(omega, delta)
+        Нужен для экспорта и для поиска пересечений δ(ω)=0.
+        Формулы совпадают с calculate_longitudinal().
+        """
+        E = float(params["E"])
+        rho = float(params["rho"])
+        S = float(params["S"])
+        L = float(params.get("length", params.get("L", 0.0)))
+        if L <= 0:
+            raise KeyError("length")
+
+        mu = float(params.get("mu", 0.0))
+
+        # время запаздывания
+        if "tau" in params:
+            tau = float(params["tau"])
+        elif "tau_long" in params:
+            tau = float(params["tau_long"])
+        else:
+            raise KeyError("tau")
+
+        a = np.sqrt(E / rho)
+
+        omega = np.asarray(omega, dtype=float)
+
+        x = omega * L / a
+
+        eps = 1e-9
+        sin_x = np.sin(x)
+        cos_x = np.cos(x)
+
+        cot_x = np.full_like(x, np.nan, dtype=float)
+        mask_cot = np.abs(sin_x) > eps
+        cot_x[mask_cot] = cos_x[mask_cot] / sin_x[mask_cot]
+
+        denom = 1.0 - mu * np.cos(omega * tau)
+        mask_denom = np.abs(denom) > eps
+        valid = mask_cot & mask_denom
+
+        K1 = np.full_like(omega, np.nan, dtype=float)
+        delta = np.full_like(omega, np.nan, dtype=float)
+
+        K1[valid] = (E * S / a) * omega[valid] * cot_x[valid] / denom[valid]
+        delta[valid] = -(E * S * mu / a) * cot_x[valid] * np.sin(omega[valid] * tau) / denom[valid]
+
+        # Ограничим выбросы
+        K1_max = float(params.get("K1_max_longitudinal", 1e10))
+        delta_max = float(params.get("delta_max_longitudinal", 1e7))
+        bad = (np.abs(K1) > K1_max) | (np.abs(delta) > delta_max)
+        K1[bad] = np.nan
+        delta[bad] = np.nan
+
+        return K1, delta
+
+    def find_longitudinal_im0_points(self, params, wmin=1.0, wmax=5000.0, n=5000):
+        """Найти все пересечения δ(ω)=0 и критическую точку (min K1 среди них).
+
+        Возвращает:
+            (points, critical)
+        где points — список словарей {"omega","K1","delta","re"},
+        critical — словарь (или None).
+        """
+        omega_start = float(params.get("omega_start", 1.0))
+        omega_end = float(params.get("omega_end", 5000.0))
+        omega = np.linspace(omega_start, omega_end, int(n))
+        K1, delta = self.compute_longitudinal_curve(params, omega)
+
+        idx = self._find_zero_crossings(delta)
         points = []
 
-        for i, j in intervals:
+        for i in idx:
+            j = i + 1
+
+            w1, w2 = omega[i], omega[j]
             d1, d2 = delta[i], delta[j]
-            if abs(d2 - d1) < 1e-12:
-                continue
 
-            alpha = -d1 / (d2 - d1)
-            k = K1[i] + alpha * (K1[j] - K1[i])
-            points.append({"re": k})
+            w0 = self._linear_root(w1, d1, w2, d2)
+            k0 = np.interp(w0, [w1, w2], [K1[i], K1[j]])
 
-        if not points:
-            return {"points": [], "critical": None}
+            points.append({
+                "omega": float(w0),
+                "K1": float(k0),
+                "delta": 0.0,
+                "re": float(k0),
+            })
 
-        crit = min(points, key=lambda p: p["re"])
-        return {"points": points, "critical": crit}
+        critical = None
+        if points:
+            critical = min(points, key=lambda p: p["K1"])
 
-    # -------------------------------------------------------------------------
-    # Сравнительный анализ (зависимости от длины)
-    # -------------------------------------------------------------------------
+        return points, critical
 
-    @staticmethod
-    def calculate_comparative(params: dict) -> dict:
+    def compute_transverse_curve(self, params: dict, omega: np.ndarray):
+        """Вернуть (Re(W(iω)), Im(W(iω))) на заданной сетке omega.
+
+        Для совместимости со старым экспортом.
         """
-        Простой сравнительный анализ:
-        - как меняются собственные частоты крутильных и продольных колебаний
-          в зависимости от длины L;
-        - условная "степень устойчивости" 1 / L².
+        res = BoreBarModel.calculate_transverse(params)
+        om_ref = np.asarray(res["omega"], dtype=float)
+        re_ref = np.asarray(res["W_real"], dtype=float)
+        im_ref = np.asarray(res["W_imag"], dtype=float)
 
-        Носит качественный характер и используется для иллюстрации.
-        """
-        lengths = np.linspace(2.0, 6.0, 20)
+        omega = np.asarray(omega, dtype=float)
 
-        torsional_freq = np.sqrt(params["G"] / params["rho"]) * np.pi / lengths
-        longitudinal_freq = np.sqrt(params["E"] / params["rho"]) * np.pi / lengths
-        stability_ratio = 1.0 / lengths**2
+        # интерполяция по рассчитанной сетке
+        re_w = np.interp(omega, om_ref, re_ref)
+        im_w = np.interp(omega, om_ref, im_ref)
+        return re_w, im_w
 
-        return {
-            "lengths": lengths,
-            "torsional_freq": torsional_freq,
-            "longitudinal_freq": longitudinal_freq,
-            "stability_ratio": stability_ratio,
-        }
-
-    # -------------------------------------------------------------------------
-    # Поперечные колебания (модальная аппроксимация)
-    # -------------------------------------------------------------------------
-
-    @staticmethod
-    def calculate_transverse(params: dict) -> dict:
+    def calculate_transverse(self, params: dict) -> dict:
         """
         Расчёт поперечных колебаний в модальной аппроксимации.
 
@@ -561,12 +667,11 @@ class BoreBarModel:
             "r": r,
         }
     
-    @staticmethod
-    def find_transverse_im0_points(params: dict) -> dict:
+    def find_transverse_im0_points(self, params: dict) -> dict:
         """
         Находит ВСЕ пересечения Im(W(iω))=0 и критическую точку: min Re среди них.
         """
-        res = BoreBarModel.calculate_transverse(params)
+        res = self.calculate_transverse(params)
         omega = np.asarray(res["omega"], dtype=float)
         Wre = np.asarray(res["W_real"], dtype=float)
         Wim = np.asarray(res["W_imag"], dtype=float)
