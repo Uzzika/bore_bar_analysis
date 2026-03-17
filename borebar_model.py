@@ -100,55 +100,69 @@ class BoreBarModel:
         return x1 - y1 * (x2 - x1) / (y2 - y1)
     # -------------------------------------------------------------------------
     # Крутильные колебания
-    
     # -------------------------------------------------------------------------
     
     def calculate_torsional(self, params: dict):
         """
         Крутильные колебания.
-        Возвращает словарь:
-            {
-                "omega": ...,
-                "sigma_real": ...,
-                "sigma_imag": ...
-            }
-        Строго по формуле исследования.
-        """
 
+        ВАЖНО:
+        Численная модель рассчитывается только для положительных частот ω > 0.
+        Если пользователь задаёт диапазон с отрицательной частью, то
+        отрицательная ветвь должна отображаться на уровне GUI как сопряжённое
+        отражение положительной ветви:
+            Re(σ(-iω)) = Re(σ(iω)),
+            Im(σ(-iω)) = -Im(σ(iω)).
+        """
         rho = float(params["rho"])
         G = float(params["G"])
         Jp = float(params["Jp"])
         Jr = float(params["Jr"])
         L = float(params["length"])
         delta1 = float(params["delta1"])
+        multiplier = float(params.get("multiplier", 1.0))
+        d1 = delta1 * multiplier
+
+        omega_start = float(params.get("omega_start", 1.0))
+        omega_end = float(params.get("omega_end", 15000.0))
+        omega_step = float(params.get("omega_step", 1.0))
+
+        if omega_step <= 0:
+            raise ValueError("omega_step должен быть > 0")
 
         omega_full = np.arange(
-            float(params["omega_start"]),
-            float(params["omega_end"]),
-            float(params["omega_step"]),
+            omega_start,
+            omega_end,
+            omega_step,
             dtype=float
         )
 
-        # всегда считаем только ω > 0 (отрицательные будут дозеркалены в GUI при необходимости)
+        # Модель считаем только для положительных частот.
+        # Отрицательная ветвь при необходимости отображается в GUI как сопряжённая.
         omega = omega_full[omega_full > 0]
+
         if omega.size == 0:
-            return {"omega": omega_full, "sigma_real": np.array([]), "sigma_imag": np.array([])}
+            return {
+                "omega": np.array([], dtype=float),
+                "sigma_real": np.array([], dtype=float),
+                "sigma_imag": np.array([], dtype=float),
+                "delta1_effective": d1,
+            }
 
         p = 1j * omega
 
         lam1 = np.sqrt(rho * G) * Jp / Jr
         lam2 = L * np.sqrt(rho / G)
 
-        expr = np.sqrt(1.0 + delta1 * p)
+        expr = np.sqrt(1.0 + d1 * p)
         arg = lam2 * p / expr
-        
+
         arg_min = float(params.get("arg_min", 0.0))
         if arg_min > 0:
             bad = np.abs(arg) < arg_min
         else:
             bad = np.zeros_like(arg, dtype=bool)
 
-        # устойчивая coth
         def stable_coth(z):
             z = np.asarray(z)
             out = np.empty_like(z, dtype=complex)
@@ -160,19 +174,24 @@ class BoreBarModel:
             return out
 
         sigma = -p - lam1 * expr * stable_coth(arg)
-        sigma[bad] = np.nan + 1j*np.nan
+        sigma[bad] = np.nan + 1j * np.nan
 
         return {
             "omega": omega,
             "sigma_real": sigma.real,
             "sigma_imag": sigma.imag,
+            "delta1_effective": d1,
         }
     
     @staticmethod
     def find_torsional_im0_points(params: dict) -> dict:
         """
-        Находит ВСЕ пересечения Im(σ(iω))=0 в заданном диапазоне ω,
-        и выбирает критическую точку: Re минимальное среди пересечений.
+        Находит ВСЕ пересечения Im(σ(iω))=0 на той же кривой,
+        которая строится методом calculate_torsional(params).
+
+        Поэтому и график, и точки Im=0, и критическая точка
+        используют одно и то же эффективное демпфирование:
+            d1 = delta1 * multiplier
         """
         # 1) посчитать кривую
         model = BoreBarModel()
@@ -214,8 +233,11 @@ class BoreBarModel:
     @staticmethod
     def find_intersection(params: dict) -> dict | None:
         """
-        Строго как Matlab fzero:
-        - единственный bracket
+        Поиск точки пересечения Im σ(iω) = 0.
+
+        ВАЖНО:
+        Используется то же эффективное демпфирование, что и в calculate_torsional:
+            d1 = delta1 * multiplier
         """
         rho = float(params["rho"])
         G = float(params["G"])
@@ -505,13 +527,14 @@ class BoreBarModel:
 
         return K1, delta
 
-    def find_longitudinal_im0_points(self, params, wmin=1.0, wmax=5000.0, n=5000):
+    def find_longitudinal_im0_points(self, params, wmin=1.0, wmax=5000.0, n=5000) -> dict:
         """Найти все пересечения δ(ω)=0 и критическую точку (min K1 среди них).
 
-        Возвращает:
-            (points, critical)
-        где points — список словарей {"omega","K1","delta","re"},
-        critical — словарь (или None).
+        Возвращает словарь единого формата:
+            {
+                "points": [...],
+                "critical": {...} | None
+            }
         """
         omega_start = float(params.get("omega_start", 1.0))
         omega_end = float(params.get("omega_end", 5000.0))
@@ -541,14 +564,17 @@ class BoreBarModel:
         if points:
             critical = min(points, key=lambda p: p["K1"])
 
-        return points, critical
+        return {
+            "points": points,
+            "critical": critical,
+        }
 
     def compute_transverse_curve(self, params: dict, omega: np.ndarray):
         """Вернуть (Re(W(iω)), Im(W(iω))) на заданной сетке omega.
 
         Для совместимости со старым экспортом.
         """
-        res = BoreBarModel.calculate_transverse(params)
+        res = self.calculate_transverse(params)
         om_ref = np.asarray(res["omega"], dtype=float)
         re_ref = np.asarray(res["W_real"], dtype=float)
         im_ref = np.asarray(res["W_imag"], dtype=float)
@@ -592,7 +618,10 @@ class BoreBarModel:
         R = params.get("R", 0.04)          # внешний радиус, м
         r = params.get("r", 0.035)         # внутренний радиус, м
         K_cut = params.get("K_cut", 6e5)   # динамическая жёсткость резания, Н/м
-        beta = float(params.get("beta", 0.3))     # коэффициент вязкого демпфирования β
+        # В модели программы используется модальный коэффициент демпфирования β.
+        # Если извне передан параметр h, трактуем его как алиас для β,
+        # чтобы не ломать совместимость с теоретическими обозначениями.
+        beta = float(params.get("beta", params.get("h", 0.3)))
 
         S = np.pi * (R**2 - r**2)          # площадь поперечного сечения
         m = rho * S                        # погонная масса

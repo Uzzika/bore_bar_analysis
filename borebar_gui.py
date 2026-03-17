@@ -1363,7 +1363,9 @@ class BoreBarGUI(QMainWindow):
 
         # ---- точки пересечения ----
         tors_pts, tors_crit = self.model.find_torsional_im0_points(params)
-        long_pts, long_crit = self.model.find_longitudinal_im0_points(params)
+        long_im0 = self.model.find_longitudinal_im0_points(params)
+        long_pts = long_im0.get("points", [])
+        long_crit = long_im0.get("critical")
         trans_pts, trans_crit = self.model.find_transverse_im0_points(params)
 
         torsional = self.model.calculate_torsional(params)

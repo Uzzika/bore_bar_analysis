@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QLabel,
     QLineEdit,
+    QMessageBox,
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -64,7 +65,7 @@ class TransversePage(QWidget):
         left.addWidget(QLabel("Динамическая жёсткость резания (K, Н/м)"))
         left.addWidget(self.K_input)
 
-        left.addWidget(QLabel("Коэффициент вязкого демпфирования (β)"))
+        left.addWidget(QLabel("Модальный коэффициент демпфирования (β)"))
         left.addWidget(self.beta_input)
 
         left.addWidget(QLabel("Коэффициент регенеративной связи (μ)"))
@@ -113,11 +114,8 @@ class TransversePage(QWidget):
 
     # ---------------------------------------------------------------------
     def get_parameters(self) -> dict:
-        """Возвращает текущие параметры страницы для экспорта."""
-        return self._get_current_parameters()
-    
-    def run_analysis(self):
-        params = {
+        """Возвращает текущие параметры страницы для анализа и экспорта."""
+        return {
             "E": float(self.E_input.text()),
             "rho": float(self.rho_input.text()),
             "length": float(self.length_input.text()),
@@ -131,6 +129,42 @@ class TransversePage(QWidget):
             "omega_end": float(self.omega_end_input.text()),
             "omega_step": float(self.omega_step_input.text()),
         }
+
+    def _get_current_parameters(self) -> dict:
+        """Оставлено для совместимости."""
+        return self.get_parameters()
+        
+    def _show_error(self, text: str):
+        QMessageBox.critical(self, "Ошибка параметров", text)
+
+    def _validate_parameters(self, params: dict):
+        if params["E"] <= 0:
+            raise ValueError("Модуль Юнга E должен быть > 0.")
+        if params["rho"] <= 0:
+            raise ValueError("Плотность ρ должна быть > 0.")
+        if params["length"] <= 0:
+            raise ValueError("Длина борштанги L должна быть > 0.")
+        if params["R"] <= 0:
+            raise ValueError("Внешний радиус R должен быть > 0.")
+        if params["r"] < 0:
+            raise ValueError("Внутренний радиус r не может быть отрицательным.")
+        if params["r"] >= params["R"]:
+            raise ValueError("Должно выполняться R > r.")
+        if params["omega_step"] <= 0:
+            raise ValueError("Шаг частоты Δω должен быть > 0.")
+        if params["omega_end"] <= params["omega_start"]:
+            raise ValueError("Конечная частота должна быть больше начальной.")
+    
+    def run_analysis(self):
+        try:
+            params = self.get_parameters()
+            self._validate_parameters(params)
+        except ValueError as e:
+            self._show_error(str(e))
+            return
+        except Exception as e:
+            self._show_error(f"Не удалось прочитать параметры: {e}")
+            return
 
         result = self.model.calculate_transverse(params)
 
@@ -207,13 +241,28 @@ class TransversePage(QWidget):
         import csv
         import numpy as np
 
-        params = self.get_parameters()
+        try:
+            params = self.get_parameters()
+            self._validate_parameters(params)
+        except ValueError as e:
+            self._show_error(str(e))
+            return
+        except Exception as e:
+            self._show_error(f"Не удалось прочитать параметры: {e}")
+            return
 
         # ---- расчёты ----
-        omega = np.linspace(1, 5000, 5000)
+        omega = np.linspace(
+            float(params["omega_start"]),
+            float(params["omega_end"]),
+            max(2, int((params["omega_end"] - params["omega_start"]) / params["omega_step"]) + 1)
+        )
+
         re_w, im_w = self.model.compute_transverse_curve(params, omega)
 
-        points, critical = self.model.find_transverse_im0_points(params)
+        im0 = self.model.find_transverse_im0_points(params)
+        points = im0.get("points", [])
+        critical = im0.get("critical")
 
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -231,6 +280,7 @@ class TransversePage(QWidget):
         if file_format == "json":
             data = {
                 "params": params,
+                "damping_model": "В программе используется модальный коэффициент демпфирования beta; параметр h из PDE отдельно не задаётся",
                 "curve": [
                     {"omega": float(o), "Re(W)": float(r), "Im(W)": float(i)}
                     for o, r, i in zip(omega, re_w, im_w)

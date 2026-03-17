@@ -6,6 +6,8 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QLabel,
     QLineEdit,
+    QFileDialog,
+    QMessageBox,
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -27,6 +29,7 @@ class TorsionalPage(QWidget):
         self.G_input = QLineEdit("8e10")
         self.length_input = QLineEdit("2.5")
         self.delta_input = QLineEdit("3.44e-6")
+        self.multiplier_input = QLineEdit("1")
         self.Jr_input = QLineEdit("2.57e-2")
         self.Jp_input = QLineEdit("1.9e-5")
         self.omega_start_input = QLineEdit("1000")
@@ -54,8 +57,10 @@ class TorsionalPage(QWidget):
         left.addWidget(QLabel("Коэффициент внутреннего демпфирования (δ₁, с)"))
         left.addWidget(self.delta_input)
 
+        left.addWidget(QLabel("Множитель демпфирования m"))
+        left.addWidget(self.multiplier_input)
+
         left.addWidget(QLabel("Момент инерции режущей головки (Jr, кг·м²)"))
-        left.addWidget(self.Jr_input)
 
         left.addWidget(QLabel("Полярный момент инерции (Jp, м⁴)"))
         left.addWidget(self.Jp_input)
@@ -98,24 +103,55 @@ class TorsionalPage(QWidget):
 
     # -----------------------------------------------------------------
     def get_parameters(self) -> dict:
-        """Возвращает текущие параметры страницы для экспорта."""
-        return self._get_current_parameters()
-
-    def run_analysis(self):
-        omega_step = float(self.omega_step_input.text())
-        params = {
+        """Возвращает текущие параметры страницы для анализа и экспорта."""
+        return {
             "rho": float(self.rho_input.text()),
             "G": float(self.G_input.text()),
             "Jr": float(self.Jr_input.text()),
             "Jp": float(self.Jp_input.text()),
             "delta1": float(self.delta_input.text()),
             "length": float(self.length_input.text()),
-            "multiplier": 1,
+            # Эффективное демпфирование в модели: d1 = delta1 * multiplier
+            "multiplier": float(self.multiplier_input.text()),
             "omega_start": float(self.omega_start_input.text()),
             "omega_end": float(self.omega_end_input.text()),
-            "omega_step": omega_step,
+            "omega_step": float(self.omega_step_input.text()),
             "arg_min": 0.2,
         }
+
+    def _get_current_parameters(self) -> dict:
+        """Совместимость со старым приватным интерфейсом."""
+        return self.get_parameters()
+    
+    def _show_error(self, text: str):
+        QMessageBox.critical(self, "Ошибка параметров", text)
+
+    def _validate_parameters(self, params: dict):
+        if params["length"] <= 0:
+            raise ValueError("Длина борштанги L должна быть > 0.")
+        if params["G"] <= 0:
+            raise ValueError("Модуль сдвига G должен быть > 0.")
+        if params["Jr"] <= 0:
+            raise ValueError("Момент инерции Jr должен быть > 0.")
+        if params["Jp"] <= 0:
+            raise ValueError("Полярный момент инерции Jp должен быть > 0.")
+        if params["omega_step"] <= 0:
+            raise ValueError("Шаг частоты Δω должен быть > 0.")
+        if params["omega_end"] <= params["omega_start"]:
+            raise ValueError("Конечная частота должна быть больше начальной.")
+        if params["multiplier"] <= 0:
+            raise ValueError("Множитель демпфирования должен быть > 0.")
+
+    def run_analysis(self):
+        try:
+            params = self.get_parameters()
+            self._validate_parameters(params)
+        except ValueError as e:
+            self._show_error(str(e))
+            return
+        except Exception as e:
+            self._show_error(f"Не удалось прочитать параметры: {e}")
+            return
 
         result = self.model.calculate_torsional(params)
 
@@ -129,16 +165,14 @@ class TorsionalPage(QWidget):
 
         omega_start = float(self.omega_start_input.text())
 
-        # 1) Если диапазон только положительный — НИКАКИХ зеркал
+        # Принятая в программе политика:
+        # модель рассчитывается только для ω > 0,
+        # а ветвь для ω < 0 отображается как комплексно-сопряжённое отражение.
         if omega_start >= 0:
             ax.plot(re[mask], im[mask], label="ω > 0")
-
-        # 2) Если пользователь реально затронул отрицательные — дозеркаливаем ТОЛЬКО относительно оси Re
         else:
-            # рисуем положительную ветвь
             ax.plot(re[mask], im[mask], label="ω > 0")
-            # и зеркальную (сопряжение): Re тот же, Im меняет знак
-            ax.plot(re[mask], -im[mask], label="ω < 0 (сопряж.)")
+            ax.plot(re[mask], -im[mask], label="ω < 0 (сопряжённая ветвь)")
 
         ax.set_title("Крутильные колебания: σ(p)")
         ax.set_xlabel("Re(σ)")
@@ -146,7 +180,6 @@ class TorsionalPage(QWidget):
         ax.grid(True)
 
         im0 = self.model.find_torsional_im0_points(params)
-        inter = self.model.find_intersection(params)
         points = im0.get("points", [])
         crit = im0.get("critical")
 
@@ -173,6 +206,10 @@ class TorsionalPage(QWidget):
             "rho": self.rho_input,
             "length": self.length_input,
             "delta1": self.delta_input,
+            "multiplier": self.multiplier_input,
+            "omega_start": self.omega_start_input,
+            "omega_end": self.omega_end_input,
+            "omega_step": self.omega_step_input,
         }
 
         for key, widget in mapping.items():
@@ -180,16 +217,28 @@ class TorsionalPage(QWidget):
                 widget.setText(str(preset[key]))
 
     def export_results(self):
-        from PyQt5.QtWidgets import QFileDialog
         import json
         import csv
         import numpy as np
 
-        params = self.get_parameters()
+        try:
+            params = self.get_parameters()
+            self._validate_parameters(params)
+        except ValueError as e:
+            self._show_error(str(e))
+            return
+        except Exception as e:
+            self._show_error(f"Не удалось прочитать параметры: {e}")
+            return
+        
         im0 = self.model.find_torsional_im0_points(params)
-        pts = im0["points"]
-        crit = im0["critical"]
+        pts = im0.get("points", [])
+        crit = im0.get("critical")
         curve = self.model.calculate_torsional(params)
+
+        omega = np.asarray(curve["omega"], dtype=float)
+        sigma_real = np.asarray(curve["sigma_real"], dtype=float)
+        sigma_imag = np.asarray(curve["sigma_imag"], dtype=float)
 
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -203,12 +252,23 @@ class TorsionalPage(QWidget):
 
         file_format = "json" if selected_filter.startswith("JSON") else "csv"
 
+        curve_rows = [
+            {
+                "omega": float(w),
+                "sigma_real": float(re),
+                "sigma_imag": float(im),
+            }
+            for w, re, im in zip(omega, sigma_real, sigma_imag)
+            if np.isfinite(re) and np.isfinite(im)
+        ]
+
         if file_format == "json":
             data = {
                 "params": params,
-                "curve": curve,
+                "delta1_effective": float(curve.get("delta1_effective", params["delta1"] * params.get("multiplier", 1.0))),
+                "curve": curve_rows,
                 "im0_points": pts,
-                "critical_point": crit
+                "critical_point": crit,
             }
 
             with open(filename, "w", encoding="utf-8") as f:
@@ -218,13 +278,32 @@ class TorsionalPage(QWidget):
             with open(filename, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
 
-                writer.writerow(["omega", "Re", "Im"])
-
-                for row in curve:
-                    writer.writerow(row)
+                writer.writerow(["omega", "sigma_real", "sigma_imag"])
+                for row in curve_rows:
+                    writer.writerow([
+                        row["omega"],
+                        row["sigma_real"],
+                        row["sigma_imag"],
+                    ])
 
                 writer.writerow([])
-                writer.writerow(["omega", "Re", "Im=0"])
-
+                writer.writerow(["# Точки пересечения Im(sigma)=0"])
+                writer.writerow(["omega", "re", "im", "frequency"])
                 for p in pts:
-                    writer.writerow([p["omega"], p["re"], 0.0])
+                    writer.writerow([
+                        p["omega"],
+                        p["re"],
+                        p["im"],
+                        p["frequency"],
+                    ])
+
+                if crit:
+                    writer.writerow([])
+                    writer.writerow(["# Критическая точка"])
+                    writer.writerow(["omega", "re", "im", "frequency"])
+                    writer.writerow([
+                        crit["omega"],
+                        crit["re"],
+                        crit["im"],
+                        crit["frequency"],
+                    ])

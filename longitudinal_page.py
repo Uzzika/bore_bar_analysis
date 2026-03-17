@@ -6,6 +6,8 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QLabel,
     QLineEdit,
+    QFileDialog,
+    QMessageBox,
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -108,10 +110,35 @@ class LongitudinalPage(QWidget):
             "omega_step": float(self.omega_step_input.text()),
     }
 
+    def _show_error(self, text: str):
+        QMessageBox.critical(self, "Ошибка параметров", text)
+
+    def _validate_parameters(self, params: dict):
+        if params["E"] <= 0:
+            raise ValueError("Модуль Юнга E должен быть > 0.")
+        if params["rho"] <= 0:
+            raise ValueError("Плотность ρ должна быть > 0.")
+        if params["S"] <= 0:
+            raise ValueError("Площадь сечения S должна быть > 0.")
+        if params["length"] <= 0:
+            raise ValueError("Длина L должна быть > 0.")
+        if params["omega_step"] <= 0:
+            raise ValueError("Шаг частоты Δω должен быть > 0.")
+        if params["omega_end"] <= params["omega_start"]:
+            raise ValueError("Конечная частота должна быть больше начальной.")
+
     # -----------------------------------------------------------------
 
     def run_analysis(self):
-        params = self.get_parameters()
+        try:
+            params = self.get_parameters()
+            self._validate_parameters(params)
+        except ValueError as e:
+            self._show_error(str(e))
+            return
+        except Exception as e:
+            self._show_error(f"Не удалось прочитать параметры: {e}")
+            return
 
         result = self.model.calculate_longitudinal(params)
 
@@ -122,12 +149,8 @@ class LongitudinalPage(QWidget):
         ax = self.figure.add_subplot(111)
         ax.plot(K1, delta)
         im0 = self.model.find_longitudinal_im0_points(params)
-
-        if isinstance(im0, tuple):
-            points, crit = im0
-        else:
-            points = im0.get("points", [])
-            crit = im0.get("critical")
+        points = im0.get("points", [])
+        crit = im0.get("critical")
 
         if points:
             ax.plot([p["re"]/1e6 for p in points],
@@ -165,23 +188,27 @@ class LongitudinalPage(QWidget):
                 widget.setText(str(preset[key]))
 
     def export_results(self):
-        from PyQt5.QtWidgets import QFileDialog
         import json
         import csv
         import numpy as np
 
-        params = self.get_parameters()
+        try:
+            params = self.get_parameters()
+            self._validate_parameters(params)
+        except ValueError as e:
+            self._show_error(str(e))
+            return
+        except Exception as e:
+            self._show_error(f"Не удалось прочитать параметры: {e}")
+            return
 
         # ---- расчёты ----
         omega = np.linspace(1, 5000, 5000)
         K1, delta = self.model.compute_longitudinal_curve(params, omega)
 
         im0 = self.model.find_longitudinal_im0_points(params)
-        if isinstance(im0, tuple):
-            points, critical = im0
-        else:
-            points = im0.get("points", [])
-            critical = im0.get("critical")
+        points = im0.get("points", [])
+        critical = im0.get("critical")
 
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
