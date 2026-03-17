@@ -61,6 +61,7 @@ class TorsionalPage(QWidget):
         left.addWidget(self.multiplier_input)
 
         left.addWidget(QLabel("Момент инерции режущей головки (Jr, кг·м²)"))
+        left.addWidget(self.Jr_input)
 
         left.addWidget(QLabel("Полярный момент инерции (Jp, м⁴)"))
         left.addWidget(self.Jp_input)
@@ -165,9 +166,6 @@ class TorsionalPage(QWidget):
 
         omega_start = float(self.omega_start_input.text())
 
-        # Принятая в программе политика:
-        # модель рассчитывается только для ω > 0,
-        # а ветвь для ω < 0 отображается как комплексно-сопряжённое отражение.
         if omega_start >= 0:
             ax.plot(re[mask], im[mask], label="ω > 0")
         else:

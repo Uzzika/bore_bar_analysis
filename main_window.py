@@ -13,7 +13,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Моделирование колебаний борштанги")
-        self.resize(900, 600)
+        self.resize(1200, 800)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)

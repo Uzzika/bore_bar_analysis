@@ -144,6 +144,7 @@ class LongitudinalPage(QWidget):
 
         K1 = np.array(result["K1"]) / 1e6
         delta = np.array(result["delta"]) / 1e3
+        model_variant = result.get("model_variant", "si_wave_speed")
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -162,7 +163,11 @@ class LongitudinalPage(QWidget):
                     "o", markersize=9, label="Критическая")
 
         ax.legend()
-        ax.set_title("Продольные колебания: кривая K₁–δ")
+        title_suffix = "SI-модель, a = √(E/ρ)"
+        if model_variant == "legacy_matlab_scaling":
+            title_suffix = "исторический режим Matlab"
+
+        ax.set_title(f"Продольные колебания: кривая K₁–δ ({title_suffix})")
         ax.set_xlabel("K₁ (МН/м)")
         ax.set_ylabel("δ (кН·с/м)")
         ax.grid(True)
@@ -204,6 +209,7 @@ class LongitudinalPage(QWidget):
 
         # ---- расчёты ----
         omega = np.linspace(1, 5000, 5000)
+        result = self.model.calculate_longitudinal(params)
         K1, delta = self.model.compute_longitudinal_curve(params, omega)
 
         im0 = self.model.find_longitudinal_im0_points(params)
@@ -226,6 +232,16 @@ class LongitudinalPage(QWidget):
         if file_format == "json":
             data = {
                 "params": params,
+                "model_info": {
+                    "model_variant": result.get("model_variant", "si_wave_speed"),
+                    "legacy_matlab_scaling": bool(result.get("legacy_matlab_scaling", False)),
+                    "wave_speed_a": float(result.get("a", 0.0)),
+                    "x_definition": result.get("x_definition", "omega * L / a"),
+                    "notes": (
+                        "Основной режим программы использует физически согласованную SI-модель "
+                        "с волновой скоростью a = sqrt(E / rho)."
+                    ),
+                },
                 "curve": [
                     {"omega": float(o), "K1": float(k), "delta": float(d)}
                     for o, k, d in zip(omega, K1, delta)
@@ -242,6 +258,10 @@ class LongitudinalPage(QWidget):
             with open(filename, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
 
+                writer.writerow(["# Модель", result.get("model_variant", "si_wave_speed")])
+                writer.writerow(["# legacy_matlab_scaling", bool(result.get("legacy_matlab_scaling", False))])
+                writer.writerow(["# a = sqrt(E/rho)", result.get("a", "")])
+                writer.writerow(["# x_definition", result.get("x_definition", "omega * L / a")])
                 writer.writerow(["omega", "K1", "delta"])
                 for o, k, d in zip(omega, K1, delta):
                     writer.writerow([o, k, d])

@@ -5,8 +5,6 @@ borebar_model.py
 - крутильные колебания (torsional);
 - продольные колебания (longitudinal);
 - поперечные колебания (transverse, модальная аппроксимация).
-
-Файл максимально приближен к формулам из курсовой работы и исследований.
 """
 
 import numpy as np
@@ -235,7 +233,6 @@ class BoreBarModel:
         """
         Поиск точки пересечения Im σ(iω) = 0.
 
-        ВАЖНО:
         Используется то же эффективное демпфирование, что и в calculate_torsional:
             d1 = delta1 * multiplier
         """
@@ -283,9 +280,8 @@ class BoreBarModel:
         Поиск критического значения δ₁,кр, при котором Re σ(iω*) = 0
         (граница устойчивости для крутильных колебаний).
 
-        Параметры:
-          params: словарь, как для calculate_torsional/find_intersection.
-                  Используется поле 'delta1' как базовое значение δ₁.
+        params: словарь, как для calculate_torsional/find_intersection.
+                Используется поле 'delta1' как базовое значение δ₁.
 
         Возвращает dict:
             'delta_crit'         — критическое δ₁ (с),
@@ -371,21 +367,9 @@ class BoreBarModel:
         """
         Продольные колебания: кривая D-разбиения (K₁, δ) в плоскости параметров.
 
-        Формулы как в Matlab-листинге исследования:
-            a² = E / ρ
-            K₁(ω) = (E S / a²) * ω * cot( ω L / a² ) / (1 - μ cos(ω τ))
-            δ(ω)  = -(E S μ / a²) * cot( ω L / a² ) * sin(ω τ) / (1 - μ cos(ω τ))
-
-        Примечание по единицам:
-        В листинге τ=60 и ω=0..0.4 очень похоже на миллисекундную шкалу.
-        В GUI τ обычно вводят в секундах (0.06 для 60 мс),
-        поэтому для аргумента cot(·) по умолчанию используется множитель time_scale=1000
-        (сек → мс), чтобы форма графика была ближе к исследованию.
-
-        Переопределения (если захочешь):
-            longitudinal_time_scale (по умолчанию 1000),
-            omega_max_longitudinal (по умолчанию 400 рад/с),
-            omega_points_longitudinal (по умолчанию 12000).
+        a² = E / ρ
+        K₁(ω) = (E S / a²) * ω * cot( ω L / a² ) / (1 - μ cos(ω τ))
+        δ(ω)  = -(E S μ / a²) * cot( ω L / a² ) * sin(ω τ) / (1 - μ cos(ω τ))
         """
         E = float(params["E"])
         rho = float(params["rho"])
@@ -425,7 +409,6 @@ class BoreBarModel:
 
         omega = np.arange(omega_start, omega_end + omega_step, omega_step)
 
-        # x = ω L / a² (с учётом масштаба)
         x = omega * L / a
 
         eps = 1e-9
@@ -447,7 +430,7 @@ class BoreBarModel:
         K1[valid] = (E * S / a) * omega[valid] * cot_x[valid] / denom[valid]
         delta[valid] = -(E * S * mu / a) * cot_x[valid] * np.sin(omega[valid] * tau) / denom[valid]
 
-        # Ограничим выбросы (NaN оставляем — matplotlib сам разорвёт линию)
+        # Ограничим выбросы
         K1_max = float(params.get("K1_max_longitudinal", 1e10))
         delta_max = float(params.get("delta_max_longitudinal", 1e7))
         bad = (np.abs(K1) > K1_max) | (np.abs(delta) > delta_max)
@@ -569,131 +552,162 @@ class BoreBarModel:
             "critical": critical,
         }
 
-    def compute_transverse_curve(self, params: dict, omega: np.ndarray):
-        """Вернуть (Re(W(iω)), Im(W(iω))) на заданной сетке omega.
-
-        Для совместимости со старым экспортом.
+    def _get_transverse_modal_data(self, params: dict) -> dict:
         """
-        res = self.calculate_transverse(params)
-        om_ref = np.asarray(res["omega"], dtype=float)
-        re_ref = np.asarray(res["W_real"], dtype=float)
-        im_ref = np.asarray(res["W_imag"], dtype=float)
+        Вычисляет модальные коэффициенты поперечной модели.
 
-        omega = np.asarray(omega, dtype=float)
-
-        # интерполяция по рассчитанной сетке
-        re_w = np.interp(omega, om_ref, re_ref)
-        im_w = np.interp(omega, om_ref, im_ref)
-        return re_w, im_w
-
-    def calculate_transverse(self, params: dict) -> dict:
+        EJ y(x,t) + EJ h y_t(x,t) + m y¨(x,t) = 0
+        α q¨ + β q˙ + γ q = F(t),
+        где
+            α = m ∫ φ² dx,
+            γ = EJ   ∫ (φ'')² dx.
+            β = h γ.
         """
-        Расчёт поперечных колебаний в модальной аппроксимации.
+        E = float(params["E"])
+        rho = float(params["rho"])
+        L = float(params["length"])
+        R = float(params.get("R", 0.04))
+        r = float(params.get("r", 0.035))
 
-        Используем формулу:
-            W(p) = φ(L)² * K_cut * (1 - μ e^{-p τ}) / (α p² + β p + γ),  p = i ω
+        S = np.pi * (R ** 2 - r ** 2)
+        m = rho * S
+        J = np.pi * (R ** 4 - r ** 4) / 4.0
 
-        где:
-            α = m ∫₀ᴸ φ(x)² dx
-            β = коэффициент вязкого демпфирования (beta)
-            γ = E J ∫₀ᴸ φ''(x)² dx
-
-        φ(x) — первая собственная форма (координатная функция) из исследования.
-
-        В приложении (Maple) собственная форма задана в виде комбинации
-        гиперболических/тригонометрических функций с численным коэффициентом 0.734
-        и множителем 1/2 (см. фрагмент Maple-скрипта в исследовании).
-
-        Важно: цель этой функции — воспроизвести годограф W(p) так, как он
-        построен в исследовании (рис. 3.1), поэтому форму φ(x) и производную
-        берём в той же записи, что и в исходных численных экспериментах.
-        """
-        E = params["E"]
-        rho = params["rho"]
-        L = params["length"]
-        mu = params["mu"]
-        tau = params["tau"]
-
-        # Геометрические параметры борштанги
-        R = params.get("R", 0.04)          # внешний радиус, м
-        r = params.get("r", 0.035)         # внутренний радиус, м
-        K_cut = params.get("K_cut", 6e5)   # динамическая жёсткость резания, Н/м
-        # В модели программы используется модальный коэффициент демпфирования β.
-        # Если извне передан параметр h, трактуем его как алиас для β,
-        # чтобы не ломать совместимость с теоретическими обозначениями.
-        beta = float(params.get("beta", params.get("h", 0.3)))
-
-        S = np.pi * (R**2 - r**2)          # площадь поперечного сечения
-        m = rho * S                        # погонная масса
-        J = np.pi * (R**4 - r**4) / 4.0    # изгибной момент инерции
-
-        # ----- Собственная форма φ(x) (как в исследовании / Maple) -----
-        # В Maple использовано: k1 := 1.875 / l; (см. исследование)
         k1 = 1.875 / L
         A = 0.734
-        C = (1.0 - A) / 2.0  # 1/2 - 0.734/2
+        C = (1.0 - A) / 2.0
 
-        # φ(x) из Maple-скрипта
         def phi(x: np.ndarray) -> np.ndarray:
-            x = np.asarray(x)
+            x = np.asarray(x, dtype=float)
             return C * (np.sinh(k1 * x) - np.sin(k1 * x))
 
-        # φ''(x) для этой формы
         def phi_pp(x: np.ndarray) -> np.ndarray:
-            x = np.asarray(x)
-            return C * (k1**2) * (np.sinh(k1 * x) + np.sin(k1 * x))
+            x = np.asarray(x, dtype=float)
+            return C * (k1 ** 2) * (np.sinh(k1 * x) + np.sin(k1 * x))
 
-        # ----- Численное вычисление α и γ через интегралы -----
         x_grid = np.linspace(0.0, L, 1000)
         phi_vals = phi(x_grid)
         phi_pp_vals = phi_pp(x_grid)
 
-        alpha = m * np.trapezoid(phi_vals**2, x_grid)
-        gamma = E * J * np.trapezoid(phi_pp_vals**2, x_grid)
+        modal_mass_integral = float(np.trapezoid(phi_vals ** 2, x_grid))
+        modal_curvature_integral = float(np.trapezoid(phi_pp_vals ** 2, x_grid))
 
-        # Диапазон частот (как в Maple-примере, 0..220 рад/с)
-        omega_start = float(params.get("omega_start", 0.1))
-        omega_end = float(params.get("omega_end", 500.0))
-        omega_step = float(params.get("omega_step", 0.5))
+        alpha = float(m * modal_mass_integral)
+        gamma = float(E * J * modal_curvature_integral)
 
-        omega = np.arange(omega_start, omega_end + omega_step, omega_step)
+        h_explicit = params.get("h", None)
+        beta_legacy = params.get("beta", None)
+
+        if h_explicit is not None:
+            h = float(h_explicit)
+            beta = float(h * gamma)
+            damping_source = "h"
+        elif beta_legacy is not None:
+            beta = float(beta_legacy)
+            h = float(beta / gamma) if gamma != 0.0 else np.nan
+            damping_source = "legacy_beta"
+        else:
+            h = 3.0214154483500606e-05
+            beta = float(h * gamma)
+            damping_source = "default_h"
+
+        return {
+            "E": E,
+            "rho": rho,
+            "length": L,
+            "R": R,
+            "r": r,
+            "S": float(S),
+            "m": float(m),
+            "J": float(J),
+            "phi": phi,
+            "phi_pp": phi_pp,
+            "phi_L": float(phi(L)),
+            "alpha": alpha,
+            "beta": beta,
+            "gamma": gamma,
+            "h": float(h),
+            "modal_mass_integral": modal_mass_integral,
+            "modal_curvature_integral": modal_curvature_integral,
+            "damping_source": damping_source,
+        }
+
+    def compute_transverse_curve(self, params: dict, omega: np.ndarray):
+        """Вернуть (Re(W(iω)), Im(W(iω))) на заданной сетке omega.
+        """
+        result = self.calculate_transverse({**params, "omega_override": np.asarray(omega, dtype=float)})
+        return np.asarray(result["W_real"], dtype=float), np.asarray(result["W_imag"], dtype=float)
+
+    def calculate_transverse(self, params: dict) -> dict:
+        """
+        Расчёт поперечных колебаний в одномодовой аппроксимации.
+        EJ y + EJ h y_t + m y¨ = 0.
+        α q¨ + β q˙ + γ q = F(t),
+
+        где
+            α = m ∫₀ᴸ φ(x)² dx,
+            β = EJ h ∫₀ᴸ (φ''(x))² dx = h γ,
+            γ = EJ   ∫₀ᴸ (φ''(x))² dx.
+
+        Годограф строится по формуле
+            W(p) = φ(L)² K_cut (1 - μ e^{-p τ}) / (α p² + β p + γ),
+            p = iω.
+
+        Параметр h является основным пользовательским параметром внутреннего
+        трения.
+        """
+        mu = float(params["mu"])
+        tau = float(params["tau"])
+        K_cut = float(params.get("K_cut", 6e5))
+
+        modal = self._get_transverse_modal_data(params)
+        alpha = modal["alpha"]
+        beta = modal["beta"]
+        gamma = modal["gamma"]
+        phi_L = modal["phi_L"]
+
+        omega_override = params.get("omega_override")
+        if omega_override is not None:
+            omega = np.asarray(omega_override, dtype=float)
+        else:
+            omega_start = float(params.get("omega_start", 0.1))
+            omega_end = float(params.get("omega_end", 500.0))
+            omega_step = float(params.get("omega_step", 0.5))
+            omega = np.arange(omega_start, omega_end + omega_step, omega_step)
+
         p = 1j * omega
-        phi_L = phi(L)
 
         with np.errstate(all="ignore"):
-            numerator = (phi_L**2) * K_cut * (1.0 - mu * np.exp(-p * tau))
-            denom = alpha * p**2 + beta * p + gamma
+            numerator = (phi_L ** 2) * K_cut * (1.0 - mu * np.exp(-p * tau))
+            denom = alpha * p ** 2 + beta * p + gamma
 
-            # Мягкая защита от деления на 0
-            eps = 1e-9
-            denom_safe = np.where(
-                np.abs(denom) < eps,
-                eps * np.sign(denom + 1e-12),
-                denom,
-            )
+            eps = 1e-12
+            denom_safe = np.where(np.abs(denom) < eps, eps + 0j, denom)
             W = numerator / denom_safe
 
-        # Фильтрация аномальных значений
-        mask = (
-            np.isfinite(W)
-            & (np.abs(W.real) < 1e8)
-            & (np.abs(W.imag) < 1e8)
-        )
+        mask = np.isfinite(W) & np.isfinite(omega)
+        mask &= (np.abs(W.real) < 1e8) & (np.abs(W.imag) < 1e8)
 
         W_valid = W[mask]
         omega_valid = omega[mask]
 
         return {
-            "omega": omega_valid,
-            "W_real": W_valid.real,
-            "W_imag": W_valid.imag,
+            "omega": np.asarray(omega_valid, dtype=float),
+            "W_real": np.asarray(W_valid.real, dtype=float),
+            "W_imag": np.asarray(W_valid.imag, dtype=float),
             "alpha": alpha,
-            "gamma": gamma,
             "beta": beta,
+            "gamma": gamma,
+            "h": modal["h"],
             "phi_L": phi_L,
             "K_cut": K_cut,
-            "R": R,
-            "r": r,
+            "R": modal["R"],
+            "r": modal["r"],
+            "J": modal["J"],
+            "S": modal["S"],
+            "modal_mass_integral": modal["modal_mass_integral"],
+            "modal_curvature_integral": modal["modal_curvature_integral"],
+            "damping_source": modal["damping_source"],
         }
     
     def find_transverse_im0_points(self, params: dict) -> dict:
