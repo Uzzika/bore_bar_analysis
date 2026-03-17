@@ -1361,7 +1361,6 @@ class BoreBarGUI(QMainWindow):
         file_format = "json" if selected_filter.startswith("JSON") else "csv"
         params = self._get_current_parameters()
 
-        # ---- точки пересечения ----
         tors_pts, tors_crit = self.model.find_torsional_im0_points(params)
         long_im0 = self.model.find_longitudinal_im0_points(params)
         long_pts = long_im0.get("points", [])
