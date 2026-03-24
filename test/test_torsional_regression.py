@@ -1,8 +1,8 @@
 import pytest
 import numpy as np
 
-from borebar_model import BoreBarModel
-from presets import get_torsional_presets
+from app.core.borebar_model import BoreBarModel
+from app.utils.presets import get_torsional_presets
 
 
 def _coth(z):

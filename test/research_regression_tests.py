@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from borebar_model import BoreBarModel
+from app.core.borebar_model import BoreBarModel
 
 
 def test_model_validation_rejects_nonphysical_direct_calls():

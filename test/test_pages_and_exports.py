@@ -2,10 +2,10 @@ import pytest
 
 PyQt5 = pytest.importorskip('PyQt5')
 
-from main_window import MainWindow
-from torsional_page import TorsionalPage
-from longitudinal_page import LongitudinalPage
-from transverse_page import TransversePage
+from app.main_window import MainWindow
+from app.ui.torsional_page import TorsionalPage
+from app.ui.longitudinal_page import LongitudinalPage
+from app.ui.transverse_page import TransversePage
 
 
 def test_main_window_registers_all_pages(qapp):

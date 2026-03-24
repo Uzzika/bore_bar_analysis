@@ -5,16 +5,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from borebar_model import BoreBarModel
-from presets import get_torsional_presets
+from app.core.borebar_model import BoreBarModel
+from app.utils.presets import get_torsional_presets
 
 
 PyQt5 = pytest.importorskip('PyQt5')
 
 from PyQt5.QtWidgets import QFileDialog
-from longitudinal_page import LongitudinalPage
-from torsional_page import TorsionalPage
-from transverse_page import TransversePage
+from app.ui.longitudinal_page import LongitudinalPage
+from app.ui.torsional_page import TorsionalPage
+from app.ui.transverse_page import TransversePage
 
 
 @pytest.mark.parametrize(
