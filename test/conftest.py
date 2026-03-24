@@ -1,25 +1,20 @@
-# test/conftest.py
 import sys
 from pathlib import Path
-
-# Добавляем корень проекта (папку, где лежит borebar_model.py) в sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../bore_bar_analysis
-sys.path.insert(0, str(PROJECT_ROOT))
-
-import numpy as np
 import pytest
-from borebar_model import BoreBarModel  # теперь найдётся
 
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
+from borebar_model import BoreBarModel
+
+@pytest.fixture(scope='session')
+def qapp():
+    qtwidgets = pytest.importorskip('PyQt5.QtWidgets')
+    app = qtwidgets.QApplication.instance()
+    if app is None:
+        app = qtwidgets.QApplication([])
+    return app
 
 @pytest.fixture
 def model():
     return BoreBarModel()
-
-
-def assert_finite_array(arr, *, allow_nan=False):
-    arr = np.asarray(arr, dtype=float)
-    if allow_nan:
-        ok = np.isfinite(arr) | np.isnan(arr)
-    else:
-        ok = np.isfinite(arr)
-    assert ok.all()

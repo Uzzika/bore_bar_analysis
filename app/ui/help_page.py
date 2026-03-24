@@ -1,0 +1,56 @@
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QFrame
+from PyQt5.QtCore import Qt
+
+
+class HelpPage(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(36, 28, 36, 28)
+        root.setSpacing(16)
+
+        card = QFrame()
+        card.setObjectName("card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(14)
+
+        title = QLabel("СПРАВКА")
+        title.setAlignment(Qt.AlignCenter)
+        title.setObjectName("sectionTitle")
+
+        text = QLabel(
+            "<b>Анализ колебаний борштанги</b><br><br>"
+            "Программа предназначена для исследования колебаний борштанги и "
+            "помогает выполнять расчёты по трем направлениям: крутильные, продольные "
+            "и поперечные колебания.<br><br>"
+            "Пользователь может задавать основные физические и геометрические параметры системы, "
+            "запускать расчёт, анализировать построенные кривые и сохранять результаты в файл.<br><br>"
+            "<b>Возможности программы</b><br>"
+            "• расчёт крутильных, продольных и поперечных колебаний;<br>"
+            "• построение расчётных кривых и годографов;<br>"
+            "• отображение характерных точек и основных расчётных параметров;<br>"
+            "• использование готовых пресетов для быстрого заполнения данных;<br>"
+            "• экспорт результатов расчёта в JSON и CSV.<br><br>"
+            "<b>Структура работы</b><br>"
+            "• в главном меню выбирается нужный раздел анализа;<br>"
+            "• на странице расчёта вводятся параметры и запускается вычисление;<br>"
+            "• после расчёта на экране отображаются график и краткая сводка результатов;<br>"
+            "• при необходимости результат можно экспортировать.<br><br>"
+            "Программа ориентирована на учебное и исследовательское использование "
+            "в рамках проекта по анализу динамики борштанги."
+        )
+        text.setAlignment(Qt.AlignLeft)
+        text.setWordWrap(True)
+        text.setObjectName("resultsLabel")
+
+        back_btn = QPushButton("Назад в меню")
+        back_btn.clicked.connect(lambda: main_window.switch(main_window.menu))
+
+        layout.addWidget(title)
+        layout.addWidget(text)
+        layout.addWidget(back_btn, alignment=Qt.AlignRight)
+        root.addWidget(card)
+        root.addStretch()
