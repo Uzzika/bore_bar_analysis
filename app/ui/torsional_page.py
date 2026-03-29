@@ -1,5 +1,4 @@
 from PyQt5.QtWidgets import (
-    QVBoxLayout,
     QPushButton,
     QLabel,
     QLineEdit,
@@ -33,7 +32,9 @@ class TorsionalPage(AnalysisPageBase):
         self.omega_end_input = QLineEdit("15000")
         self.omega_step_input = QLineEdit("1")
 
-        result_card, self.results_label = self._make_result_card("После расчёта здесь появится краткая сводка по критическим точкам и параметрам модели.")
+        result_card, self.results_label = self._make_result_card(
+            "После расчёта здесь появится краткая сводка по критическим точкам и параметрам модели."
+        )
 
         analyze_btn = QPushButton("Выполнить анализ")
         analyze_btn.clicked.connect(self.run_analysis)
@@ -95,8 +96,214 @@ class TorsionalPage(AnalysisPageBase):
         if params["omega_end"] <= params["omega_start"]:
             raise ValueError("Конечная частота должна быть больше начальной.")
 
-    def _update_result_summary(self, result: dict, critical: dict | None):
-        self._set_results_text(build_torsional_summary(result, critical))
+    @staticmethod
+    def _build_display_curve_from_physical(result: dict, params: dict) -> dict:
+        omega_pos = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
+        re_pos = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
+        im_pos = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
+
+        if omega_pos.size == 0:
+            empty = np.array([], dtype=float)
+            return {
+                "omega": empty,
+                "re": empty,
+                "im": empty,
+                "policy": "display_rebuilt_from_physical_branch_no_points",
+            }
+
+        if float(params.get("omega_start", 0.0)) < 0.0:
+            omega = np.concatenate([-omega_pos[::-1], omega_pos])
+            re = np.concatenate([re_pos[::-1], re_pos])
+            im = np.concatenate([-im_pos[::-1], im_pos])
+            policy = "display_rebuilt_as_exact_conjugate_mirror_of_physical_positive_branch"
+        else:
+            omega = omega_pos.copy()
+            re = re_pos.copy()
+            im = im_pos.copy()
+            policy = "display_rebuilt_from_physical_positive_branch"
+
+        return {
+            "omega": omega,
+            "re": re,
+            "im": im,
+            "policy": policy,
+        }
+
+    @staticmethod
+    def _compute_plot_policy(display_curve: dict, points=None, critical=None) -> dict:
+        re = np.asarray(display_curve.get("re", []), dtype=float)
+        im = np.asarray(display_curve.get("im", []), dtype=float)
+        finite = np.isfinite(re) & np.isfinite(im)
+
+        if np.count_nonzero(finite) < 2:
+            return {
+                "xlim": (-1.0, 1.0),
+                "ylim": (-1.0, 1.0),
+                "y_clip": (-1.0, 1.0),
+                "origin_band_left": 0.0,
+                "mode": "fallback_empty",
+            }
+
+        x_all = re[finite]
+        y_all = im[finite]
+
+        if points:
+            px = np.asarray([p["re"] for p in points if np.isfinite(p.get("re", np.nan))], dtype=float)
+            if px.size:
+                x_all = np.concatenate([x_all, px])
+        if critical and np.isfinite(critical.get("re", np.nan)):
+            x_all = np.concatenate([x_all, np.asarray([float(critical["re"])], dtype=float)])
+
+        xmin = float(np.min(x_all))
+        xmax = float(np.max(x_all))
+        xspan = max(xmax - xmin, 1e-9)
+        xpad = xspan * 0.08
+        xlim = (xmin - xpad, xmax + xpad)
+
+        # Разрешаем резать только узкую правую полосу около начала координат.
+        # Это соответствует вертикальным выбросам около Re≈0, а не всей верхней/нижней дуге.
+        origin_band_fraction = 0.06
+        origin_band_left = xmax - xspan * origin_band_fraction
+
+        non_origin_mask = finite & (re < origin_band_left)
+        if np.count_nonzero(non_origin_mask) >= 8:
+            y_for_view = np.abs(im[non_origin_mask])
+            mode = "origin_only_segment_clip"
+        else:
+            y_for_view = np.abs(y_all)
+            mode = "fallback_full_curve_no_origin_separation"
+
+        ymax_visible = float(np.max(y_for_view)) if y_for_view.size else float(np.max(np.abs(y_all)))
+        ymax_visible = max(ymax_visible, 1e-9)
+
+        y_clip_max = ymax_visible * 1.03
+        y_window_max = ymax_visible * 1.12
+
+        return {
+            "xlim": xlim,
+            "ylim": (-y_window_max, y_window_max),
+            "y_clip": (-y_clip_max, y_clip_max),
+            "origin_band_left": origin_band_left,
+            "mode": mode,
+        }
+
+    @staticmethod
+    def _clip_segment_to_horizontal_strip(x1, y1, x2, y2, ylo, yhi):
+        eps = 1e-15
+        dy = y2 - y1
+
+        if abs(dy) <= eps:
+            if ylo <= y1 <= yhi:
+                return [(x1, y1), (x2, y2)], False
+            return [], True
+
+        t_a = (ylo - y1) / dy
+        t_b = (yhi - y1) / dy
+        t_enter = max(0.0, min(t_a, t_b))
+        t_exit = min(1.0, max(t_a, t_b))
+
+        if t_enter > t_exit:
+            return [], True
+
+        xa = x1 + (x2 - x1) * t_enter
+        ya = y1 + dy * t_enter
+        xb = x1 + (x2 - x1) * t_exit
+        yb = y1 + dy * t_exit
+
+        partial = not (np.isclose(t_enter, 0.0) and np.isclose(t_exit, 1.0))
+        return [(xa, ya), (xb, yb)], partial
+
+    @staticmethod
+    def _build_plot_curve(display_curve: dict, plot_policy: dict) -> dict:
+        re = np.asarray(display_curve.get("re", []), dtype=float)
+        im = np.asarray(display_curve.get("im", []), dtype=float)
+        n = re.size
+
+        ylo, yhi = plot_policy["y_clip"]
+        origin_band_left = float(plot_policy["origin_band_left"])
+
+        out_x = []
+        out_y = []
+        clipped_segments = 0
+
+        def append_point(xv, yv):
+            if out_x and np.isfinite(out_x[-1]) and np.isfinite(out_y[-1]):
+                if np.isclose(out_x[-1], xv) and np.isclose(out_y[-1], yv):
+                    return
+            out_x.append(float(xv))
+            out_y.append(float(yv))
+
+        def append_gap():
+            if not out_x or np.isfinite(out_x[-1]) or np.isfinite(out_y[-1]):
+                out_x.append(np.nan)
+                out_y.append(np.nan)
+
+        if n == 0:
+            return {
+                "re": np.array([], dtype=float),
+                "im": np.array([], dtype=float),
+                "clipped_count": 0,
+                "policy": "origin_only_segment_clip_no_points",
+            }
+
+        for i in range(n - 1):
+            x1, y1 = re[i], im[i]
+            x2, y2 = re[i + 1], im[i + 1]
+
+            if not (np.isfinite(x1) and np.isfinite(y1) and np.isfinite(x2) and np.isfinite(y2)):
+                append_gap()
+                continue
+
+            near_origin_spike_zone = max(x1, x2) >= origin_band_left
+
+            if not near_origin_spike_zone:
+                append_point(x1, y1)
+                append_point(x2, y2)
+                continue
+
+            kept, partial = TorsionalPage._clip_segment_to_horizontal_strip(x1, y1, x2, y2, ylo, yhi)
+            if not kept:
+                clipped_segments += 1
+                append_gap()
+                continue
+
+            if partial:
+                clipped_segments += 1
+                append_point(*kept[0])
+                append_point(*kept[-1])
+                append_gap()
+            else:
+                append_point(*kept[0])
+                append_point(*kept[-1])
+
+        return {
+            "re": np.asarray(out_x, dtype=float),
+            "im": np.asarray(out_y, dtype=float),
+            "clipped_count": int(clipped_segments),
+            "policy": "segment_clip_only_for_spikes_near_origin",
+        }
+
+    def _update_result_summary(
+        self,
+        result: dict,
+        critical: dict | None,
+        display_curve: dict | None = None,
+        plot_policy: dict | None = None,
+        plot_curve: dict | None = None,
+    ):
+        text = build_torsional_summary(result, critical)
+        if display_curve is not None:
+            text += "\n\nОтображение графика:"
+            text += f"\nDisplay-ветвь: {display_curve.get('policy', 'unknown')}"
+        if plot_policy is not None:
+            text += f"\nРежим показа: {plot_policy.get('mode', 'unknown')}"
+        if plot_curve is not None:
+            text += f"\nОбрезано сегментов-шпилей только у начала координат: {int(plot_curve.get('clipped_count', 0))}"
+            text += (
+                "\nВажно: физическая кривая, special points, критическая точка и экспорт не изменялись; "
+                "отрисовка меняется только для шпилей около Re≈0."
+            )
+        self._set_results_text(text)
 
     def run_analysis(self):
         try:
@@ -113,11 +320,15 @@ class TorsionalPage(AnalysisPageBase):
         im0 = self.model.find_torsional_im0_points(params)
         points = im0.get("points", [])
         critical = im0.get("critical")
-        self._update_result_summary(result, critical)
+
+        display_curve = self._build_display_curve_from_physical(result, params)
+        plot_policy = self._compute_plot_policy(display_curve, points=points, critical=critical)
+        plot_curve = self._build_plot_curve(display_curve, plot_policy)
+        self._update_result_summary(result, critical, display_curve, plot_policy, plot_curve)
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-        ax.plot(result["display_sigma_real"], result["display_sigma_imag"], linewidth=2.0, label="σ(iω)")
+        ax.plot(plot_curve["re"], plot_curve["im"], linewidth=2.0, label="σ(iω)")
 
         if points:
             ax.plot([p["re"] for p in points], [0.0] * len(points), "o", markersize=5, label="Im(σ)=0")
@@ -127,6 +338,8 @@ class TorsionalPage(AnalysisPageBase):
         ax.legend()
         ax.axhline(0, linestyle="--", linewidth=0.8, alpha=0.45)
         ax.axvline(0, linestyle="--", linewidth=0.8, alpha=0.45)
+        ax.set_xlim(*plot_policy["xlim"])
+        ax.set_ylim(*plot_policy["ylim"])
         self._style_plot_axes(ax, "Крутильные колебания: кривая D-разбиения σ(iω)", "Re(σ)", "Im(σ)")
         self._finalize_plot()
         if self.main_window is not None and hasattr(self.main_window, "status"):

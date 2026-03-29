@@ -6,7 +6,6 @@ borebar_model.py
 - продольные колебания (longitudinal);
 - поперечные колебания (transverse, модальная аппроксимация).
 
-Файл максимально приближен к формулам из курсовой работы и исследований.
 """
 
 import numpy as np
@@ -404,17 +403,6 @@ class BoreBarModel:
         - расчёта физической кривой;
         - поиска Im(σ)=0;
         - выбора критической точки.
-
-        Если пользователь задаёт диапазон, заходящий в отрицательные частоты,
-        физическая положительная ветвь должна строиться независимо от того,
-        с какого отрицательного значения стартовал np.arange(). Иначе
-        положительная часть сетки сдвигается на накопленную ошибку шага:
-            -20000, -19999.9, ... , 0.099997...
-        вместо канонических:
-            0.1, 0.2, 0.3, ...
-        Из-за этого один и тот же физический расчёт даёт разные значения для
-        почти нулевого демпфирования. Поэтому при omega_start <= 0 используем
-        сетку, привязанную к нулю и построенную через целые номера шагов.
         """
         omega_start = float(params.get("omega_start", 0.001))
         omega_end = float(params.get("omega_end", omega_start))
@@ -427,11 +415,6 @@ class BoreBarModel:
             omega_pos = BoreBarModel.build_frequency_grid(params, include_endpoint=False)
             return np.asarray(omega_pos[omega_pos > 0.0], dtype=float)
 
-        # Ищем наибольший целый n, для которого n * omega_step < omega_end.
-        # Делать это через (omega_end - eps) / omega_step ненадёжно: например,
-        # для 20000 / 0.1 из-за двоичной арифметики легко получить ровно 200000.0
-        # и ошибочно включить точку omega_end, хотя физическая сетка строится как
-        # np.arange(step, omega_end, step), то есть БЕЗ правого конца.
         ratio = float(omega_end / omega_step)
         n_last = int(np.floor(np.nextafter(ratio, -np.inf)))
         if n_last < 1:
@@ -447,8 +430,6 @@ class BoreBarModel:
             omega_pos, sigma_real_pos, sigma_imag_pos, delta1_effective
         """
         params = BoreBarModel.validate_torsional_params(params)
-
-        params = self.validate_torsional_params(params)
 
         rho = float(params["rho"])
         G = float(params["G"])
@@ -498,41 +479,92 @@ class BoreBarModel:
         omega_pos: np.ndarray,
         sigma_real_pos: np.ndarray,
         sigma_imag_pos: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
         """
-        Строит отображаемую кривую для GUI/экспорта.
-
-        Физическая модель считается только на ω > 0.
-        Если пользователь запросил диапазон с отрицательной частью,
-        отображаемая ветвь достраивается как сопряжённое отражение:
-
-            Re(σ(-iω)) = Re(σ(iω))
-            Im(σ(-iω)) = -Im(σ(iω))
+        Строит display-ветвь для GUI.
         """
         omega_pos = np.asarray(omega_pos, dtype=float)
         sigma_real_pos = np.asarray(sigma_real_pos, dtype=float)
         sigma_imag_pos = np.asarray(sigma_imag_pos, dtype=float)
 
-        omega_start = float(params.get("omega_start", 0.0))
-
         if omega_pos.size == 0:
-            return (
-                np.array([], dtype=float),
-                np.array([], dtype=float),
-                np.array([], dtype=float),
+            empty = np.array([], dtype=float)
+            return empty, empty, empty, {
+                "display_outlier_count": 0,
+                "display_outlier_threshold_re": None,
+                "display_outlier_threshold_im": None,
+                "display_outlier_quantile": None,
+                "display_outlier_expand": None,
+                "display_outlier_policy": "no_points",
+            }
+
+        re_display_pos = sigma_real_pos.copy()
+        im_display_pos = sigma_imag_pos.copy()
+
+        finite_mask = (
+            np.isfinite(re_display_pos)
+            & np.isfinite(im_display_pos)
+        )
+
+        robust_q = float(params.get("display_outlier_quantile", 0.995))
+        robust_expand = float(params.get("display_outlier_expand", 4.0))
+        use_robust_filter = bool(params.get("display_filter_outliers", True))
+
+        display_outlier_mask = np.zeros_like(re_display_pos, dtype=bool)
+        thr_re = None
+        thr_im = None
+
+        if use_robust_filter and np.count_nonzero(finite_mask) >= 8:
+            robust_q = min(max(robust_q, 0.90), 0.9999)
+            robust_expand = max(1.0, robust_expand)
+
+            finite_re = np.abs(re_display_pos[finite_mask])
+            finite_im = np.abs(im_display_pos[finite_mask])
+
+            thr_re = float(np.quantile(finite_re, robust_q)) * robust_expand
+            thr_im = float(np.quantile(finite_im, robust_q)) * robust_expand
+
+            # Если вся кривая сама по себе крупная, пороги должны быть не меньше max,
+            # чтобы не скрыть нормальную ветвь из-за почти константного диапазона.
+            if np.isfinite(thr_re):
+                thr_re = max(thr_re, float(np.nanmedian(finite_re)) * robust_expand)
+            if np.isfinite(thr_im):
+                thr_im = max(thr_im, float(np.nanmedian(finite_im)) * robust_expand)
+
+            display_outlier_mask = (
+                finite_mask
+                & (
+                    ((np.abs(re_display_pos) > thr_re) if thr_re is not None else False)
+                    | ((np.abs(im_display_pos) > thr_im) if thr_im is not None else False)
+                )
             )
 
+            if np.any(display_outlier_mask):
+                re_display_pos[display_outlier_mask] = np.nan
+                im_display_pos[display_outlier_mask] = np.nan
+
+        omega_start = float(params.get("omega_start", 0.0))
         if omega_start < 0.0:
             omega_neg = -omega_pos[::-1]
-            re_neg = sigma_real_pos[::-1]
-            im_neg = -sigma_imag_pos[::-1]
+            re_neg = re_display_pos[::-1]
+            im_neg = -im_display_pos[::-1]
 
             omega_display = np.concatenate([omega_neg, omega_pos])
-            sigma_real_display = np.concatenate([re_neg, sigma_real_pos])
-            sigma_imag_display = np.concatenate([im_neg, sigma_imag_pos])
-            return omega_display, sigma_real_display, sigma_imag_display
+            sigma_real_display = np.concatenate([re_neg, re_display_pos])
+            sigma_imag_display = np.concatenate([im_neg, im_display_pos])
+        else:
+            omega_display = omega_pos.copy()
+            sigma_real_display = re_display_pos.copy()
+            sigma_imag_display = im_display_pos.copy()
 
-        return omega_pos.copy(), sigma_real_pos.copy(), sigma_imag_pos.copy()
+        return omega_display, sigma_real_display, sigma_imag_display, {
+            "display_outlier_count": int(np.count_nonzero(display_outlier_mask)),
+            "display_outlier_threshold_re": thr_re,
+            "display_outlier_threshold_im": thr_im,
+            "display_outlier_quantile": robust_q if use_robust_filter else None,
+            "display_outlier_expand": robust_expand if use_robust_filter else None,
+            "display_outlier_policy": "robust_nan_gap_filter" if use_robust_filter else "disabled",
+        }
 
     def calculate_torsional(self, params: dict) -> dict:
         """
@@ -622,18 +654,12 @@ class BoreBarModel:
         sig_re_pos = sigma_clean.real.astype(float)
         sig_im_pos = sigma_clean.imag.astype(float)
 
-        omega_start = float(params.get("omega_start", 0.0))
-        if omega_start < 0.0:
-            omega_neg = -omega_pos[::-1]
-            re_neg = sig_re_pos[::-1]
-            im_neg = -sig_im_pos[::-1]
-            omega_display = np.concatenate([omega_neg, omega_pos])
-            sig_re_display = np.concatenate([re_neg, sig_re_pos])
-            sig_im_display = np.concatenate([im_neg, sig_im_pos])
-        else:
-            omega_display = omega_pos.copy()
-            sig_re_display = sig_re_pos.copy()
-            sig_im_display = sig_im_pos.copy()
+        omega_display, sig_re_display, sig_im_display, display_metadata = self._build_torsional_display_curve(
+            params=params,
+            omega_pos=omega_pos,
+            sigma_real_pos=sig_re_pos,
+            sigma_imag_pos=sig_im_pos,
+        )
 
         return {
             "physical_omega": omega_pos,
@@ -655,18 +681,80 @@ class BoreBarModel:
                 "coth_sinh_eps": coth_sinh_eps,
                 "arg_min": arg_min,
                 "sigma_clip": sigma_clip,
+                **display_metadata,
             },
             "model_variant": "torsional_physical_positive_plus_model_display_symmetry",
             "negative_frequency_policy": "display_curve_is_built_as_conjugate_mirror_of_positive_branch",
         }
 
     @staticmethod
+    def _torsional_research_policy(params: dict) -> dict:
+        """
+        Правило выбора критической точки.
+
+        Политика параметризуема через:
+        - torsional_research_root_window_low
+        - torsional_research_root_window_high
+        - torsional_research_root_window_high_long
+        - torsional_research_long_length_threshold
+        """
+        length = float(params.get("length", 0.0))
+        low = float(params.get("torsional_research_root_window_low", 500.0))
+        high_default = float(params.get("torsional_research_root_window_high", 2000.0))
+        high_long = float(params.get("torsional_research_root_window_high_long", 1000.0))
+        long_threshold = float(params.get("torsional_research_long_length_threshold", 5.5))
+
+        high = high_long if length >= long_threshold else high_default
+        if high < low:
+            high = low
+
+        return {
+            "kind": "first_im0_in_research_window",
+            "omega_low": low,
+            "omega_high": high,
+            "length": length,
+            "long_length_threshold": long_threshold,
+            "long_window_applied": bool(length >= long_threshold),
+        }
+
+    @staticmethod
+    def _select_torsional_research_critical_point(points: list[dict], params: dict) -> tuple[dict | None, dict]:
+        """
+        Выбрать критическую точку по исследовательскому правилу.
+
+        Приоритеты выбора:
+        1) первая точка Im(σ)=0 в окне [omega_low, omega_high];
+        2) если в окне точек нет — первая точка с omega >= omega_low;
+        3) если и таких нет — просто первая точка из всего списка.
+        """
+        policy = BoreBarModel._torsional_research_policy(params)
+        if not points:
+            return None, {**policy, "selection_status": "no_im0_points"}
+
+        ordered = sorted(points, key=lambda item: (item["omega"], item["re"]))
+        low = float(policy["omega_low"])
+        high = float(policy["omega_high"])
+
+        in_window = [p for p in ordered if low <= float(p["omega"]) <= high]
+        if in_window:
+            return dict(in_window[0]), {**policy, "selection_status": "first_point_in_window"}
+
+        after_low = [p for p in ordered if float(p["omega"]) >= low]
+        if after_low:
+            return dict(after_low[0]), {**policy, "selection_status": "fallback_first_point_after_window_low"}
+
+        return dict(ordered[0]), {**policy, "selection_status": "fallback_first_available_point"}
+
+    @staticmethod
     def find_torsional_im0_points(params: dict) -> dict:
         """
         Ищет все пересечения Im(σ(iω)) = 0 по физической положительной ветви.
 
-        Сначала учитываются точные нули, попавшие в узлы сетки,
-        затем добавляются нули между узлами по смене знака.
+        Возвращает раздельно:
+        - all_im0_points: все найденные пересечения;
+        - research_critical_point: критическая точка по исследовательскому правилу;
+        - minimum_re_critical_point: самая левая точка среди всех пересечений
+          (оставлена только как диагностическая / legacy-информация).
         """
         model = BoreBarModel()
         res = model.calculate_torsional(params)
@@ -707,21 +795,28 @@ class BoreBarModel:
                 continue
             dedup.append(p)
 
-        critical = min(dedup, key=lambda p: p["re"]) if dedup else None
+        research_critical_point, policy_meta = BoreBarModel._select_torsional_research_critical_point(dedup, params)
+        minimum_re_critical_point = min(dedup, key=lambda p: p["re"]) if dedup else None
+
         return {
+            "all_im0_points": dedup,
+            "research_critical_point": research_critical_point,
+            "minimum_re_critical_point": minimum_re_critical_point,
+            # legacy aliases for compatibility with existing GUI/export code
             "points": dedup,
-            "critical": critical,
+            "critical": research_critical_point,
             "source_curve": "physical_positive_branch",
+            "critical_selection_policy": policy_meta,
         }
 
     @staticmethod
     def find_intersection(params: dict) -> dict | None:
         """
-        Совместимый интерфейс: возвращает критическую точку из find_torsional_im0_points(),
-        не решая отдельную задачу root_scalar.
+        Совместимый интерфейс: возвращает критическую точку по исследовательскому
+        правилу, а не глобальный минимум Re среди всех пересечений Im(σ)=0.
         """
         im0 = BoreBarModel.find_torsional_im0_points(params)
-        critical = im0.get("critical")
+        critical = im0.get("research_critical_point") or im0.get("critical")
         if not critical:
             return None
 
