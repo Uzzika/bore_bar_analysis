@@ -1,8 +1,11 @@
+from time import perf_counter
+
 from PyQt5.QtWidgets import (
     QPushButton,
     QLabel,
     QLineEdit,
     QFileDialog,
+    QApplication,
 )
 import numpy as np
 
@@ -18,6 +21,8 @@ class TorsionalPage(AnalysisPageBase):
         super().__init__(main_window)
         self.model = BoreBarModel()
         self.current_preset_name = "custom"
+        self._cached_signature = None
+        self._cached_analysis = None
 
         left_card, left = self._make_card("Параметры крутильной модели")
 
@@ -95,6 +100,72 @@ class TorsionalPage(AnalysisPageBase):
             raise ValueError("Шаг частоты Δω должен быть > 0.")
         if params["omega_end"] <= params["omega_start"]:
             raise ValueError("Конечная частота должна быть больше начальной.")
+
+
+    @staticmethod
+    def _params_signature(params: dict):
+        return tuple(sorted((key, repr(value)) for key, value in params.items()))
+
+    def _compute_im0_from_result(self, result: dict, params: dict) -> dict:
+        omega = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
+        sig_re = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
+        sig_im = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
+
+        points = []
+        eps = float(params.get("im0_eps_torsional", 1e-9))
+        finite_zero = np.isfinite(omega) & np.isfinite(sig_re) & np.isfinite(sig_im) & (np.abs(sig_im) <= eps)
+        for idx in np.where(finite_zero)[0]:
+            w = float(omega[idx])
+            points.append({
+                "omega": w,
+                "re": float(sig_re[idx]),
+                "im": 0.0,
+                "frequency": float(w / (2.0 * np.pi)),
+            })
+
+        for i, j in BoreBarModel._sign_change_intervals(omega, sig_im):
+            w1, w2 = omega[i], omega[j]
+            y1, y2 = sig_im[i], sig_im[j]
+            w0 = BoreBarModel._linear_root(w1, y1, w2, y2)
+            re0 = np.interp(w0, [w1, w2], [sig_re[i], sig_re[j]])
+            points.append({
+                "omega": float(w0),
+                "re": float(re0),
+                "im": 0.0,
+                "frequency": float(w0 / (2.0 * np.pi)),
+            })
+
+        dedup = []
+        omega_tol = float(params.get("im0_omega_tol_torsional", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
+        re_tol = float(params.get("im0_re_tol_torsional", 1e-6))
+        for p in sorted(points, key=lambda item: (item["omega"], item["re"])):
+            if dedup and abs(p["omega"] - dedup[-1]["omega"]) <= omega_tol and abs(p["re"] - dedup[-1]["re"]) <= re_tol:
+                continue
+            dedup.append(p)
+
+        research_critical_point, policy_meta = BoreBarModel._select_torsional_research_critical_point(dedup, params)
+        minimum_re_critical_point = min(dedup, key=lambda p: p["re"]) if dedup else None
+        return {
+            "all_im0_points": dedup,
+            "research_critical_point": research_critical_point,
+            "minimum_re_critical_point": minimum_re_critical_point,
+            "points": dedup,
+            "critical": research_critical_point,
+            "source_curve": "physical_positive_branch",
+            "critical_selection_policy": policy_meta,
+        }
+
+    def _get_or_compute_analysis(self, params: dict) -> tuple[dict, dict]:
+        signature = self._params_signature(params)
+        if self._cached_signature == signature and self._cached_analysis is not None:
+            cached = self._cached_analysis
+            return cached["result"], cached["im0"]
+
+        result = self.model.calculate_torsional(params)
+        im0 = self._compute_im0_from_result(result, params)
+        self._cached_signature = signature
+        self._cached_analysis = {"result": result, "im0": im0}
+        return result, im0
 
     @staticmethod
     def _build_display_curve_from_physical(result: dict, params: dict) -> dict:
@@ -290,6 +361,7 @@ class TorsionalPage(AnalysisPageBase):
         display_curve: dict | None = None,
         plot_policy: dict | None = None,
         plot_curve: dict | None = None,
+        elapsed_seconds: float | None = None,
     ):
         text = build_torsional_summary(result, critical)
         if display_curve is not None:
@@ -298,11 +370,13 @@ class TorsionalPage(AnalysisPageBase):
         if plot_policy is not None:
             text += f"\nРежим показа: {plot_policy.get('mode', 'unknown')}"
         if plot_curve is not None:
-            text += f"\nОбрезано сегментов-шпилей только у начала координат: {int(plot_curve.get('clipped_count', 0))}"
+            text += f"\nОбрезано сегментов-шпилей у начала координат: {int(plot_curve.get('clipped_count', 0))}"
             text += (
                 "\nВажно: физическая кривая, special points, критическая точка и экспорт не изменялись; "
                 "отрисовка меняется только для шпилей около Re≈0."
             )
+        if elapsed_seconds is not None:
+            text += f"\nВремя расчёта и построения графика: {elapsed_seconds:.3f} с"
         self._set_results_text(text)
 
     def run_analysis(self):
@@ -316,15 +390,14 @@ class TorsionalPage(AnalysisPageBase):
             self._show_error(f"Не удалось прочитать параметры: {e}")
             return
 
-        result = self.model.calculate_torsional(params)
-        im0 = self.model.find_torsional_im0_points(params)
+        started_at = perf_counter()
+        result, im0 = self._get_or_compute_analysis(params)
         points = im0.get("points", [])
         critical = im0.get("critical")
 
         display_curve = self._build_display_curve_from_physical(result, params)
         plot_policy = self._compute_plot_policy(display_curve, points=points, critical=critical)
         plot_curve = self._build_plot_curve(display_curve, plot_policy)
-        self._update_result_summary(result, critical, display_curve, plot_policy, plot_curve)
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -341,9 +414,12 @@ class TorsionalPage(AnalysisPageBase):
         ax.set_xlim(*plot_policy["xlim"])
         ax.set_ylim(*plot_policy["ylim"])
         self._style_plot_axes(ax, "Крутильные колебания: кривая D-разбиения σ(iω)", "Re(σ)", "Im(σ)")
-        self._finalize_plot()
+        self.canvas.draw()
+        QApplication.processEvents()
+        elapsed_seconds = perf_counter() - started_at
+        self._update_result_summary(result, critical, display_curve, plot_policy, plot_curve, elapsed_seconds)
         if self.main_window is not None and hasattr(self.main_window, "status"):
-            self.main_window.status.showMessage("Крутильный анализ выполнен")
+            self.main_window.status.showMessage(f"Крутильный анализ выполнен за {elapsed_seconds:.3f} с")
 
     def apply_preset(self, name):
         if name not in self.presets:
@@ -367,8 +443,7 @@ class TorsionalPage(AnalysisPageBase):
                 widget.setText(str(preset[key]))
 
     def _build_export_data(self, params: dict) -> dict:
-        result = self.model.calculate_torsional(params)
-        im0 = self.model.find_torsional_im0_points(params)
+        result, im0 = self._get_or_compute_analysis(params)
         critical = im0.get("critical")
 
         curve_omega = np.asarray(result["physical_omega"], dtype=float)
@@ -423,7 +498,7 @@ class TorsionalPage(AnalysisPageBase):
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Сохранить крутильные результаты",
-            "",
+            self._default_export_path("torsional_results.json"),
             "JSON (*.json);;CSV (*.csv)",
         )
         if not filename:

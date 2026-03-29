@@ -1,9 +1,12 @@
 from PyQt5.QtCore import Qt
+from time import perf_counter
+
 from PyQt5.QtWidgets import (
     QPushButton,
     QLabel,
     QLineEdit,
     QFileDialog,
+    QApplication,
     QComboBox,
     QSizePolicy,
 )
@@ -187,14 +190,17 @@ class TransversePage(AnalysisPageBase):
         if params["omega_end"] <= params["omega_start"]:
             raise ValueError("Конечная частота должна быть больше начальной.")
 
-    def _update_result_summary(self, result: dict, display_curve: dict | None = None):
+    def _update_result_summary(self, result: dict, display_curve: dict | None = None, elapsed_seconds: float | None = None):
         if display_curve is None:
             omega = np.asarray(result.get("omega", []), dtype=float)
             display_curve = {
                 "display_point_count": int(omega.size),
                 "base_point_count": int(omega.size),
             }
-        self._set_results_text(build_transverse_summary(result, display_curve))
+        text = build_transverse_summary(result, display_curve)
+        if elapsed_seconds is not None:
+            text += f"\nВремя расчёта и построения графика: {elapsed_seconds:.3f} с"
+        self._set_results_text(text)
 
     def run_analysis(self):
         try:
@@ -207,9 +213,9 @@ class TransversePage(AnalysisPageBase):
             self._show_error(f"Не удалось прочитать параметры: {e}")
             return
 
+        started_at = perf_counter()
         result = self.model.calculate_transverse(params)
         display_curve = self.model.build_transverse_display_curve(params)
-        self._update_result_summary(result, display_curve)
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -228,9 +234,12 @@ class TransversePage(AnalysisPageBase):
         ax.axhline(0, linestyle="--", linewidth=0.8, alpha=0.45)
         ax.axvline(0, linestyle="--", linewidth=0.8, alpha=0.45)
         self._style_plot_axes(ax, "Поперечные колебания: годограф W(p)", "Re(W)", "Im(W)", equal=True)
-        self._finalize_plot()
+        self.canvas.draw()
+        QApplication.processEvents()
+        elapsed_seconds = perf_counter() - started_at
+        self._update_result_summary(result, display_curve, elapsed_seconds)
         if self.main_window is not None and hasattr(self.main_window, "status"):
-            self.main_window.status.showMessage("Поперечный анализ выполнен")
+            self.main_window.status.showMessage(f"Поперечный анализ выполнен за {elapsed_seconds:.3f} с")
 
     def apply_preset(self, name: str):
         if name not in self.presets:
@@ -330,7 +339,7 @@ class TransversePage(AnalysisPageBase):
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Сохранить поперечные результаты",
-            "",
+            self._default_export_path("transverse_results.json"),
             "JSON (*.json);;CSV (*.csv)"
         )
         if not filename:

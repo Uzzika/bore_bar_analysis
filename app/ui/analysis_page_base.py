@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtWidgets import (
     QWidget,
@@ -183,6 +185,21 @@ class AnalysisPageBase(QWidget):
         self._left_scroll = left_scroll
         self._plot_card = plot_card
         self._result_card = result_card
+
+
+    def _project_root_dir(self) -> Path:
+        try:
+            return Path(__file__).resolve().parents[2]
+        except Exception:
+            return Path.cwd()
+
+    def _ensure_export_dir(self) -> Path:
+        export_dir = self._project_root_dir() / "export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        return export_dir
+
+    def _default_export_path(self, filename: str) -> str:
+        return str(self._ensure_export_dir() / filename)
 
     def sizeHint(self) -> QSize:
         return QSize(1310, 860)

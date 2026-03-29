@@ -1,4 +1,6 @@
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QFileDialog
+from time import perf_counter
+
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QFileDialog
 import numpy as np
 
 from app.ui.analysis_page_base import AnalysisPageBase
@@ -87,8 +89,11 @@ class LongitudinalPage(AnalysisPageBase):
         if params["omega_end"] <= params["omega_start"]:
             raise ValueError("Конечная частота должна быть больше начальной.")
 
-    def _update_result_summary(self, result: dict):
-        self._set_results_text(build_longitudinal_summary(result))
+    def _update_result_summary(self, result: dict, elapsed_seconds: float | None = None):
+        text = build_longitudinal_summary(result)
+        if elapsed_seconds is not None:
+            text += f"\nВремя расчёта и построения графика: {elapsed_seconds:.3f} с"
+        self._set_results_text(text)
 
     def run_analysis(self):
         try:
@@ -101,8 +106,8 @@ class LongitudinalPage(AnalysisPageBase):
             self._show_error(f"Не удалось прочитать параметры: {e}")
             return
 
+        started_at = perf_counter()
         result = self.model.calculate_longitudinal(params)
-        self._update_result_summary(result)
 
         K1 = np.asarray(result["K1"], dtype=float) / 1e6
         delta = np.asarray(result["delta"], dtype=float) / 1e3
@@ -122,9 +127,12 @@ class LongitudinalPage(AnalysisPageBase):
 
         ax.legend()
         self._style_plot_axes(ax, "Продольные колебания: кривая K₁–δ", "K₁ (МН/м)", "δ (кН·с/м)")
-        self._finalize_plot()
+        self.canvas.draw()
+        QApplication.processEvents()
+        elapsed_seconds = perf_counter() - started_at
+        self._update_result_summary(result, elapsed_seconds)
         if self.main_window is not None and hasattr(self.main_window, "status"):
-            self.main_window.status.showMessage("Продольный анализ выполнен")
+            self.main_window.status.showMessage(f"Продольный анализ выполнен за {elapsed_seconds:.3f} с")
 
     def apply_preset(self, name):
         if name not in self.presets:
@@ -211,7 +219,7 @@ class LongitudinalPage(AnalysisPageBase):
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Сохранить продольные результаты",
-            "",
+            self._default_export_path("longitudinal_results.json"),
             "JSON (*.json);;CSV (*.csv)"
         )
         if not filename:
