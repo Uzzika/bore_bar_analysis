@@ -44,7 +44,10 @@ def test_longitudinal_page_preset_application_and_export_schema(qapp):
     assert float(page.mu_input.text()) == params['mu']
     assert data['analysis_type'] == 'longitudinal'
     assert data['model_info']['model_variant'] == 'si_wave_speed'
+    assert data['model_info']['research_alignment_status'] == 'si_interpretation_of_research_formulas'
+    assert 'SI' in data['model_info']['model_regime_label']
     assert data['numerics']['curve_saved_kind'] == 'direct_curve'
+    assert data['special_points']['research_critical_point'] is not None
     assert data['curve_summary']['point_count'] == len(data['curve'])
 
 
@@ -58,6 +61,7 @@ def test_transverse_page_export_contains_modal_metadata(qapp):
     assert data['model_info']['modal_shape_source'] == 'verified_cantilever_first_mode_phi'
     assert data['model_info']['shape_normalization'] == 'phi(L)=1'
     assert data['model_info']['beta'] == pytest.approx(data['model_info']['h'] * data['model_info']['gamma'])
+    assert data['special_points']['research_critical_point'] is not None
 
 def test_transverse_page_summary_mentions_computed_beta(qapp):
     page = TransversePage(None)

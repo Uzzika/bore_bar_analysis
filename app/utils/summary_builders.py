@@ -7,6 +7,7 @@ def build_torsional_summary(result: dict, critical: dict | None) -> str:
     lines = [f"Эффективное демпфирование δ₁,эфф = {d1_eff:.6g} с"]
     if critical:
         lines.extend([
+            "Исследовательская критическая точка:",
             f"ω* = {critical['omega']:.6g} рад/с",
             f"f* = {critical['frequency']:.6g} Гц",
             f"Re σ* = {critical['re']:.6g}",
@@ -25,12 +26,23 @@ def build_torsional_summary(result: dict, critical: dict | None) -> str:
 
 
 def build_longitudinal_summary(result: dict) -> str:
+    invalid_counts = dict(result.get("invalid_reason_counts", {}))
     return "\n".join([
         "Продольная модель:",
+        f"Режим: {result.get('longitudinal_model_regime_label', 'SI-интерпретация исследовательской постановки')}",
+        f"Статус относительно исследования: {result.get('research_alignment_status', 'si_interpretation_of_research_formulas')}",
+        f"Назначение режима: {result.get('longitudinal_model_note', 'Физически согласованная SI-реализация формул K₁–δ.')}",
         f"a = √(E/ρ) = {result['a']:.6g} м/с",
         f"K₁(0+) = {result['K1_0']:.6g}",
         f"δ(0+) = {result['delta_0']:.6g}",
         f"ω₁ ≈ πa/L = {result['omega_main']:.6g} рад/с",
+        f"Отбраковано точек: {int(result.get('invalid_point_count', 0))}",
+        "Причины: "
+        f"omega_nonfinite={int(invalid_counts.get('omega_nonfinite', 0))}, "
+        f"cot_singularity={int(invalid_counts.get('cot_singularity', 0))}, "
+        f"denominator_too_small={int(invalid_counts.get('denominator_too_small', 0))}, "
+        f"response_clip={int(invalid_counts.get('response_clip', 0))}, "
+        f"response_nonfinite={int(invalid_counts.get('response_nonfinite', 0))}",
     ])
 
 
@@ -38,13 +50,14 @@ def build_longitudinal_summary(result: dict) -> str:
 def build_transverse_summary(result: dict, display_curve: dict) -> str:
     invalid_counts = dict(result.get("invalid_reason_counts", {}))
     return "\n".join([
-        "Модальная модель поперечных колебаний:",
+        "Модель поперечных колебаний:",
         f"α = {result['alpha']:.6g}",
         f"γ = {result['gamma']:.6g}",
         f"h = {result['h']:.6g} c",
         f"β = h·γ = {result['beta']:.6g}",
         f"Источник диссипации: {result['damping_source']}",
         f"Форма φ(x): {result.get('modal_shape_source', 'unknown')}",
+        f"Интерпретация режима: {result.get('modal_shape_description', 'unknown')}",
         f"Нормировка: {result.get('shape_normalization', 'unknown')}",
         f"Отбраковано точек: {int(result.get('invalid_point_count', 0))}",
         "Причины: "

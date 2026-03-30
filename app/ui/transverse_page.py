@@ -1,4 +1,3 @@
-from PyQt5.QtCore import Qt
 from time import perf_counter
 
 from PyQt5.QtWidgets import (
@@ -7,7 +6,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QFileDialog,
     QApplication,
-    QComboBox,
     QSizePolicy,
 )
 import numpy as np
@@ -16,7 +14,6 @@ from app.ui.analysis_page_base import AnalysisPageBase
 from app.core.borebar_model import BoreBarModel
 from app.utils.presets import get_transverse_presets
 from app.utils.export_utils import curve_rows_with_gaps, curve_summary, export_analysis_data
-from app.utils.summary_builders import build_transverse_summary
 
 
 class TransversePage(AnalysisPageBase):
@@ -25,6 +22,8 @@ class TransversePage(AnalysisPageBase):
         self.main_window = main_window
         self.model = BoreBarModel()
         self.current_preset_name = "custom"
+        self._cached_signature = None
+        self._cached_analysis = None
 
         left_card, left = self._make_card("Параметры поперечной модели")
 
@@ -58,44 +57,8 @@ class TransversePage(AnalysisPageBase):
             widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             widget.setMinimumWidth(0)
 
-        self.modal_shape_combo = QComboBox()
-        # Важно: Ignored позволяет combo сжиматься внутри узкой прокручиваемой панели
-        # и не раздувать минимальную ширину всей левой колонки.
-        self.modal_shape_combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.modal_shape_combo.setMinimumWidth(0)
-        self.modal_shape_combo.setMaximumWidth(16777215)
-        self.modal_shape_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.modal_shape_combo.setMinimumContentsLength(1)
-
-        verified_short = "Первая собственная форма консольной балки"
-        project_short = "Project approximation"
-
-        self.modal_shape_combo.addItem(
-            verified_short,
-            "verified_cantilever_first_mode_phi",
-        )
-        self.modal_shape_combo.setItemData(
-            0,
-            "Первая собственная форма консольной балки (верифицированная)",
-            role=Qt.ToolTipRole,
-        )
-        self.modal_shape_combo.addItem(
-            project_short,
-            "project_maple_compatible_phi",
-        )
-        self.modal_shape_combo.setItemData(
-            1,
-            "Project approximation (Maple-compatible)",
-            role=Qt.ToolTipRole,
-        )
-        self.modal_shape_combo.setToolTip(
-            "Выбор варианта формы φ(x). Полные названия доступны во всплывающей подсказке."
-        )
-        self.modal_shape_combo.currentIndexChanged.connect(self._refresh_modal_shape_tooltip)
-        self._refresh_modal_shape_tooltip()
-
         result_card, self.results_label = self._make_result_card(
-            "После расчёта здесь будут показаны α, β, γ и сведения о форме φ(x)."
+            "После расчёта здесь будут показаны α, β, γ и сведения о верифицированной поперечной модели."
         )
 
         analyze_btn = QPushButton("Выполнить анализ")
@@ -127,11 +90,6 @@ class TransversePage(AnalysisPageBase):
             left.addWidget(label)
             left.addWidget(widget)
 
-        label = QLabel("Вариант формы φ(x)")
-        label.setObjectName("fieldLabel")
-        left.addWidget(label)
-        left.addWidget(self.modal_shape_combo)
-
         left.addWidget(analyze_btn)
         left.addWidget(back_btn)
         left.addWidget(export_btn)
@@ -145,13 +103,21 @@ class TransversePage(AnalysisPageBase):
 
         self._build_analysis_layout(left_card, result_card)
 
-    def _refresh_modal_shape_tooltip(self):
-        idx = self.modal_shape_combo.currentIndex()
-        if idx < 0:
-            self.modal_shape_combo.setToolTip("")
-            return
-        full_text = self.modal_shape_combo.itemData(idx, Qt.ToolTipRole) or self.modal_shape_combo.currentText()
-        self.modal_shape_combo.setToolTip(str(full_text))
+    @staticmethod
+    def _params_signature(params: dict):
+        return tuple(sorted((key, repr(value)) for key, value in params.items()))
+
+    def _get_or_compute_analysis(self, params: dict) -> tuple[dict, dict]:
+        signature = self._params_signature(params)
+        if self._cached_signature == signature and self._cached_analysis is not None:
+            cached = self._cached_analysis
+            return cached["result"], cached["im0"]
+
+        result = self.model.calculate_transverse(params)
+        im0 = self.model.find_transverse_im0_points_from_result(params, result)
+        self._cached_signature = signature
+        self._cached_analysis = {"result": result, "im0": im0}
+        return result, im0
 
     def get_parameters(self) -> dict:
         return {
@@ -167,40 +133,87 @@ class TransversePage(AnalysisPageBase):
             "omega_start": float(self.omega_start_input.text()),
             "omega_end": float(self.omega_end_input.text()),
             "omega_step": float(self.omega_step_input.text()),
-            "transverse_modal_shape_variant": self.modal_shape_combo.currentData(),
+            "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
         }
 
     def _validate_parameters(self, params: dict):
-        if params["E"] <= 0:
-            raise ValueError("Модуль Юнга E должен быть > 0.")
-        if params["rho"] <= 0:
-            raise ValueError("Плотность ρ должна быть > 0.")
-        if params["length"] <= 0:
-            raise ValueError("Длина борштанги L должна быть > 0.")
-        if params["R"] <= 0:
-            raise ValueError("Внешний радиус R должен быть > 0.")
-        if params["r"] < 0:
-            raise ValueError("Внутренний радиус r не может быть отрицательным.")
-        if params["r"] >= params["R"]:
-            raise ValueError("Должно выполняться R > r.")
-        if params["h"] < 0:
-            raise ValueError("Коэффициент внутреннего трения h не может быть отрицательным.")
-        if params["omega_step"] <= 0:
-            raise ValueError("Шаг частоты Δω должен быть > 0.")
-        if params["omega_end"] <= params["omega_start"]:
-            raise ValueError("Конечная частота должна быть больше начальной.")
+        self.model.validate_transverse_params(params)
 
-    def _update_result_summary(self, result: dict, display_curve: dict | None = None, elapsed_seconds: float | None = None):
+
+    @staticmethod
+    def _format_nonzero_reason_counts(reason_counts: dict) -> str:
+        items = []
+        for key, value in (reason_counts or {}).items():
+            try:
+                ivalue = int(value)
+            except Exception:
+                continue
+            if ivalue > 0:
+                items.append(f"{key}={ivalue}")
+        return ", ".join(items) if items else "нет"
+
+    def _update_result_summary(
+        self,
+        result: dict,
+        im0: dict | None = None,
+        display_curve: dict | None = None,
+        elapsed_seconds: float | None = None,
+    ):
         if display_curve is None:
-            omega = np.asarray(result.get("omega", []), dtype=float)
+            omega = np.asarray(result.get('omega', []), dtype=float)
             display_curve = {
-                "display_point_count": int(omega.size),
-                "base_point_count": int(omega.size),
+                'display_point_count': int(omega.size),
+                'base_point_count': int(omega.size),
             }
-        text = build_transverse_summary(result, display_curve)
+
+        lines = [
+            "Поперечная модель",
+            "",
+            "Ключевые параметры:",
+            f"α = {float(result.get('alpha', float('nan'))):.6g}",
+            f"β = {float(result.get('beta', float('nan'))):.6g}",
+            f"γ = {float(result.get('gamma', float('nan'))):.6g}",
+            f"h = {float(result.get('h', float('nan'))):.6g} с",
+            f"β = h·γ = {float(result.get('h', float('nan'))) * float(result.get('gamma', float('nan'))):.6g}",
+            f"Форма φ(x): {result.get('modal_shape_source', 'verified_cantilever_first_mode_phi')}, нормировка {result.get('shape_normalization', 'phi(L)=1')}",
+        ]
+
+        if im0 is not None:
+            points = im0.get('points', []) or []
+            research_critical = im0.get('research_critical_point') or im0.get('critical')
+            policy = im0.get('critical_selection_policy', {}) or {}
+            lines += [
+                "",
+                "Исследовательские special points:",
+                f"Найдено точек Im(W)=0: {len(points)}",
+                f"Политика выбора критической точки: {policy.get('kind', 'minimum_ReW_on_im_zero_set')}",
+            ]
+            if research_critical is not None:
+                lines += [
+                    "Исследовательская критическая точка:",
+                    f"ω* = {float(research_critical.get('omega', float('nan'))):.6g} рад/с",
+                    f"f* = {float(research_critical.get('frequency', float('nan'))):.6g} Гц",
+                    f"Re(W*) = {float(research_critical.get('re', float('nan'))):.6g}",
+                ]
+            else:
+                lines.append("Исследовательская критическая точка: не найдена")
+
+        invalid_count = int(result.get('invalid_point_count', 0))
+        lines += [
+            "",
+            "Паспорт расчёта:",
+            f"Отбраковано точек: {invalid_count}",
+            f"Причины: {self._format_nonzero_reason_counts(result.get('invalid_reason_counts', {}))}",
+        ]
+        if display_curve is not None:
+            base_n = int(display_curve.get('base_point_count', 0))
+            disp_n = int(display_curve.get('display_point_count', 0))
+            if base_n > 0:
+                lines.append(f"Точек на физической сетке / display-сетке: {base_n} / {disp_n}")
         if elapsed_seconds is not None:
-            text += f"\nВремя расчёта и построения графика: {elapsed_seconds:.3f} с"
-        self._set_results_text(text)
+            lines.append(f"Время расчёта и построения графика: {elapsed_seconds:.3f} с")
+        self._set_results_text("\n".join(lines))
+
 
     def run_analysis(self):
         try:
@@ -214,21 +227,46 @@ class TransversePage(AnalysisPageBase):
             return
 
         started_at = perf_counter()
-        result = self.model.calculate_transverse(params)
-        display_curve = self.model.build_transverse_display_curve(params)
+        result, im0 = self._get_or_compute_analysis(params)
+        display_curve = self.model.build_transverse_display_curve_from_result(params, result)
+        plot_im0 = self.model.build_transverse_plot_im0_from_result(
+            params,
+            result,
+            display_curve=display_curve,
+            semantic_im0=im0,
+        )
 
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         ax.plot(display_curve["W_real"], display_curve["W_imag"], linewidth=2.0, label="W(iω)")
 
-        im0 = self.model.find_transverse_im0_points(params)
-        points = im0.get("points", [])
-        crit = im0.get("critical")
+        plot_points = plot_im0.get("points", [])
+        plot_research_critical = plot_im0.get("research_critical_point")
 
-        if points:
-            ax.plot([p["re"] for p in points], [0.0] * len(points), "o", markersize=5, label="Im(W)=0")
-        if crit:
-            ax.plot(crit["re"], 0.0, "o", markersize=9, label="Критическая")
+        if plot_points:
+            ax.plot(
+                [p["re"] for p in plot_points],
+                [0.0] * len(plot_points),
+                "o",
+                color="orange",
+                markersize=5,
+                label="Im(W)=0",
+                zorder=6,
+                markeredgecolor="white",
+                markeredgewidth=0.7,
+            )
+        if plot_research_critical:
+            ax.plot(
+                plot_research_critical["re"],
+                0.0,
+                "o",
+                color="green",
+                markersize=9,
+                label="Критическая",
+                zorder=7,
+                markeredgecolor="white",
+                markeredgewidth=0.9,
+            )
 
         ax.legend()
         ax.axhline(0, linestyle="--", linewidth=0.8, alpha=0.45)
@@ -237,7 +275,7 @@ class TransversePage(AnalysisPageBase):
         self.canvas.draw()
         QApplication.processEvents()
         elapsed_seconds = perf_counter() - started_at
-        self._update_result_summary(result, display_curve, elapsed_seconds)
+        self._update_result_summary(result, im0, display_curve, elapsed_seconds)
         if self.main_window is not None and hasattr(self.main_window, "status"):
             self.main_window.status.showMessage(f"Поперечный анализ выполнен за {elapsed_seconds:.3f} с")
 
@@ -266,20 +304,14 @@ class TransversePage(AnalysisPageBase):
             if key in preset:
                 widget.setText(str(preset[key]))
 
-        variant = preset.get("transverse_modal_shape_variant")
-        if variant is not None:
-            idx = self.modal_shape_combo.findData(variant)
-            if idx >= 0:
-                self.modal_shape_combo.setCurrentIndex(idx)
 
     def _build_export_data(self, params: dict) -> dict:
-        result = self.model.calculate_transverse(params)
+        result, im0 = self._get_or_compute_analysis(params)
         curve_omega = np.asarray(result["omega"], dtype=float)
         curve_re = np.asarray(result["W_real"], dtype=float)
         curve_im = np.asarray(result["W_imag"], dtype=float)
 
-        im0 = self.model.find_transverse_im0_points(params)
-        critical = im0.get("critical")
+        research_critical = im0.get("research_critical_point") or im0.get("critical")
 
         return {
             "export_schema_version": 4,
@@ -290,6 +322,14 @@ class TransversePage(AnalysisPageBase):
                 "model_variant": result.get("model_variant", "galerkin_one_mode_unknown"),
                 "curve_semantics": "curve stores omega, Re(W), Im(W) on the full physical grid; invalid points are kept as null/NaN gaps",
                 "transverse_model": "Galerkin one-mode model",
+                "transverse_model_regime": result.get("transverse_model_regime"),
+                "transverse_model_regime_label": result.get("transverse_model_regime_label"),
+                "transverse_model_scope": result.get("transverse_model_scope"),
+                "transverse_model_note": result.get("transverse_model_note"),
+                "research_alignment_status": result.get("research_alignment_status"),
+                "interpretation_note": (
+                    "Единственный пользовательский режим: исследовательская одномодовая модель с верифицированной первой собственной формой консольной балки"
+                ),
                 "modal_shape_variant": result.get("modal_shape_variant"),
                 "modal_shape_source": result.get("modal_shape_source"),
                 "modal_shape_description": result.get("modal_shape_description"),
@@ -318,7 +358,9 @@ class TransversePage(AnalysisPageBase):
             "curve_summary": curve_summary(curve_omega, curve_re, curve_im, include_total_count=True),
             "special_points": {
                 "im0_points": im0.get("points", []),
-                "critical_point": critical,
+                "research_critical_point": research_critical,
+                "minimum_re_critical_point": im0.get("minimum_re_critical_point"),
+                "critical_selection_policy": im0.get("critical_selection_policy"),
             },
             "curve": curve_rows_with_gaps(curve_omega, curve_re, curve_im),
         }

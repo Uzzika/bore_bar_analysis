@@ -188,10 +188,20 @@ class AnalysisPageBase(QWidget):
 
 
     def _project_root_dir(self) -> Path:
+        candidates = []
         try:
-            return Path(__file__).resolve().parents[2]
+            here = Path(__file__).resolve()
+            candidates.extend([here.parent, *here.parents])
         except Exception:
-            return Path.cwd()
+            pass
+        candidates.append(Path.cwd())
+
+        for candidate in candidates:
+            if (candidate / "main.py").exists():
+                return candidate
+            if (candidate / "app" / "main_window.py").exists() or (candidate / "main_window.py").exists():
+                return candidate
+        return Path.cwd()
 
     def _ensure_export_dir(self) -> Path:
         export_dir = self._project_root_dir() / "export"

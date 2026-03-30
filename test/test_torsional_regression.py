@@ -68,11 +68,14 @@ def test_torsional_find_im0_points_matches_sign_change_count(model):
     expected_intervals = BoreBarModel._sign_change_intervals(omega, sigma_im)
     im0 = model.find_torsional_im0_points(params)
     points = im0['points']
-    critical = im0['critical']
+    research_critical = im0['research_critical_point']
+    minimum_re = im0['minimum_re_critical_point']
 
     assert len(points) == len(expected_intervals) > 0
-    assert critical is not None
-    assert critical['re'] == min(p['re'] for p in points)
+    assert research_critical is not None
+    assert minimum_re is not None
+    assert 'critical' not in im0
+    assert minimum_re['re'] == min(p['re'] for p in points)
 
     for point, (i, j) in zip(points, expected_intervals):
         assert omega[i] <= point['omega'] <= omega[j]

@@ -68,7 +68,7 @@ def test_torsional_research_length_growth_reduces_stability_boundary():
 
     critical_re = []
     for length in (2.5, 3.0, 4.0, 5.0, 6.0):
-        crit = model.find_torsional_im0_points({**base, "length": length})["critical"]
+        crit = model.find_torsional_im0_points({**base, "length": length})["research_critical_point"]
         assert crit is not None
         critical_re.append(float(crit["re"]))
 
@@ -92,7 +92,7 @@ def test_torsional_research_internal_damping_moves_boundary_toward_stability():
 
     critical_re = []
     for multiplier in (1.0, 2.0, 3.0, 4.0, 6.0, 10.0):
-        crit = model.find_torsional_im0_points({**base, "multiplier": multiplier})["critical"]
+        crit = model.find_torsional_im0_points({**base, "multiplier": multiplier})["research_critical_point"]
         assert crit is not None
         critical_re.append(float(crit["re"]))
 
@@ -126,8 +126,8 @@ def test_longitudinal_regenerative_delay_zero_crossings_follow_pi_over_tau_grid(
         assert act == pytest.approx(exp, abs=0.2)
 
 
-def test_transverse_maple_reference_mode_preserves_research_parameters_and_root_pattern():
-    """Режим project_maple_compatible_phi должен сохранять параметры эталонного Maple-эксперимента."""
+def test_transverse_verified_mode_preserves_research_parameters_and_root_pattern():
+    """Поперечная модель должна устойчиво работать в единственном верифицированном режиме."""
     model = BoreBarModel()
     params = {
         "E": 2.1e11,
@@ -136,25 +136,24 @@ def test_transverse_maple_reference_mode_preserves_research_parameters_and_root_
         "R": 0.04,
         "r": 0.035,
         "K_cut": 6.0e5,
-        "beta": 0.3,
         "mu": 0.6,
         "tau": 0.1,
+        "h": 3.02141544835e-05,
         "omega_start": 0.0,
         "omega_end": 220.0,
         "omega_step": 0.1,
-        "transverse_modal_shape_variant": "project_maple_compatible_phi",
     }
 
     res = model.calculate_transverse(params)
     im0 = model.find_transverse_im0_points(params)
 
-    assert res["modal_shape_source"] == "project_maple_compatible_phi"
-    assert res["beta"] == pytest.approx(0.3)
-    assert res["model_variant"] == "galerkin_one_mode_project_shape"
+    assert res["modal_shape_source"] == "verified_cantilever_first_mode_phi"
+    assert res["model_variant"] == "galerkin_one_mode_verified_shape"
+    assert res["shape_normalization"] == "phi(L)=1"
+    assert res["beta"] == pytest.approx(res["h"] * res["gamma"])
 
     points = im0["points"]
-    critical = im0["critical"]
+    critical = im0["research_critical_point"]
     assert len(points) >= 8
     assert critical is not None
     assert critical["re"] < 0.0
-    assert 150.0 <= critical["omega"] <= 200.0

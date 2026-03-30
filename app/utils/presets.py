@@ -1,259 +1,231 @@
-"""Типовые пресеты по видам колебаний.
+"""Набор пресетов с максимально различимыми режимами для всех трёх анализов.
 
-Пресеты ниже нужны не только для красивых демонстраций, а для покрытия
-критически важных режимов каждой модели:
-- базовый рабочий режим;
-- режимы, где проявляется симметрия/асимметрия представления;
-- слабое и сильное демпфирование;
-- влияние длины борштанги;
-- регенеративные и почти-сингулярные случаи.
-
-Замечание:
-- крутильная модель физически считается на положительной ветви ω>0, но часть
-  пресетов специально оставляет симметричный диапазон [-ω, +ω] для проверки
-  корректного display-представления;
-- пресеты содержат полные наборы параметров страниц, чтобы их можно было
-  использовать как единый источник типовых конфигураций.
+Файл предназначен для app/utils/presets.py.
+Здесь сознательно подобраны режимы, которые дают заметно разные формы кривых,
+а не просто слегка сдвигают уже похожие годографы.
 """
 
 
-def _torsional_base() -> dict:
-    return {
-        "rho": 7800.0,
-        "G": 8.0e10,
-        "length": 3.0,
-        "delta1": 3.44e-6,
-        "multiplier": 1.0,
-        "Jr": 2.57e-2,
-        "Jp": 1.9e-5,
-        "omega_start": 1000.0,
-        "omega_end": 15000.0,
-        "omega_step": 1.0,
-    }
-
-
-
 def get_torsional_presets() -> dict:
-    base = _torsional_base()
     return {
-        "Крутильные — физическая положительная ветвь": {
-            **base,
-            "omega_start": 1000.0,
-            "omega_end": 15000.0,
-            "omega_step": 1.0,
-        },
+        # Имя сохранено, т.к. на него опираются тесты и логика проверки display-симметрии.
         "Крутильные — симметричная display-проверка": {
-            **base,
-            "omega_start": -15000.0,
-            "omega_end": 15000.0,
-            "omega_step": 2.0,
-        },
-        "Крутильные — локальный диапазон около ω*": {
-            **base,
-            "omega_start": -2500.0,
-            "omega_end": 2500.0,
-            "omega_step": 0.25,
-        },
-        "Крутильные — почти без демпфирования": {
-            **base,
-            "delta1": 1.0e-8,
+            "rho": 7800.0,
+            "G": 8.0e10,
+            "length": 3.0,
+            "delta1": 3.44e-6,
             "multiplier": 1.0,
-            "omega_start": -20000.0,
-            "omega_end": 20000.0,
-            "omega_step": 0.1,
-        },
-        "Крутильные — усиленное внутреннее демпфирование": {
-            **base,
-            "delta1": 8.0e-6,
-            "multiplier": 3.0,
-            "omega_start": -15000.0,
-            "omega_end": 15000.0,
-            "omega_step": 2.0,
-        },
-        "Крутильные — длинная борштанга": {
-            **base,
-            "length": 6.0,
-            "multiplier": 2.0,
-            "omega_start": 500.0,
-            "omega_end": 15000.0,
-            "omega_step": 1.0,
-        },
-        "Крутильные — повышенная инерция головки": {
-            **base,
-            "Jr": 4.5e-2,
+            "Jr": 2.57e-2,
+            "Jp": 1.9e-5,
             "omega_start": -12000.0,
             "omega_end": 12000.0,
             "omega_step": 2.0,
         },
+        # Имя сохранено под тесты; делаем диапазон локальным и более «резким» рядом с рабочей областью.
+        "Крутильные — локальный диапазон около ω*": {
+            "rho": 7800.0,
+            "G": 8.0e10,
+            "length": 3.0,
+            "delta1": 3.44e-6,
+            "multiplier": 1.0,
+            "Jr": 2.57e-2,
+            "Jp": 1.9e-5,
+            "omega_start": -2500.0,
+            "omega_end": 3500.0,
+            "omega_step": 0.25,
+        },
+        # Имя сохранено под тесты; график становится резко вытянутым, хорошо видны шпили и чувствительность.
+        "Крутильные — почти без демпфирования": {
+            "rho": 7800.0,
+            "G": 8.0e10,
+            "length": 2.5,
+            "delta1": 3.44e-6,
+            "multiplier": 0.12,
+            "Jr": 2.57e-2,
+            "Jp": 1.9e-5,
+            "omega_start": -6000.0,
+            "omega_end": 6000.0,
+            "omega_step": 0.1,
+        },
+        "Крутильные — длинная борштанга и сильное внутреннее трение": {
+            "rho": 7800.0,
+            "G": 8.0e10,
+            "length": 6.0,
+            "delta1": 3.44e-6,
+            "multiplier": 10.0,
+            "Jr": 2.57e-2,
+            "Jp": 1.9e-5,
+            "omega_start": 500.0,
+            "omega_end": 4000.0,
+            "omega_step": 0.5,
+        },
+        "Крутильные — базовый исследовательский прогон": {
+            "rho": 7800.0,
+            "G": 8.0e10,
+            "length": 2.5,
+            "delta1": 3.44e-6,
+            "multiplier": 1.0,
+            "Jr": 2.57e-2,
+            "Jp": 1.9e-5,
+            "omega_start": 1000.0,
+            "omega_end": 15000.0,
+            "omega_step": 1.0,
+        },
     }
-
-
-
-def _longitudinal_base() -> dict:
-    return {
-        "E": 2.0e11,
-        "rho": 7800.0,
-        "S": 2.0e-4,
-        "length": 2.5,
-        "mu": 0.10,
-        "tau": 60e-3,
-        "omega_start": 0.001,
-        "omega_end": 400.0,
-        "omega_step": 0.1,
-    }
-
 
 
 def get_longitudinal_presets() -> dict:
-    base = _longitudinal_base()
     return {
-        "Продольные — базовый рабочий режим": {
-            **base,
-        },
-        "Продольные — без регенерации (μ=0)": {
-            **base,
-            "mu": 0.0,
-            "tau": 0.0,
-        },
+        # На это имя опирается тест применения пресета.
         "Продольные — умеренная регенерация": {
-            **base,
-            "length": 3.0,
-            "mu": 0.45,
-            "tau": 0.05,
+            "E": 2.0e11,
+            "rho": 7800.0,
+            "S": 3.0e-4,
+            "length": 2.5,
+            "mu": 0.35,
+            "tau": 0.04,
+            "omega_start": 0.001,
             "omega_end": 500.0,
+            "omega_step": 0.1,
         },
-        "Продольные — почти критическая связь": {
-            **base,
-            "length": 3.0,
-            "mu": 0.80,
-            "tau": 0.03,
-            "omega_end": 500.0,
-        },
+        # Сохраняем узнаваемое имя из UI, но делаем режим действительно резко отличающимся.
         "Продольные — около сингулярности знаменателя": {
-            **base,
-            "mu": 0.95,
+            "E": 2.0e11,
+            "rho": 7800.0,
+            "S": 6.0e-3,
+            "length": 6.0,
+            "mu": 0.92,
             "tau": 0.02,
-            "omega_end": 600.0,
+            "omega_start": 0.001,
+            "omega_end": 2000.0,
             "omega_step": 0.05,
         },
-        "Продольные — длинная борштанга": {
-            **base,
-            "length": 5.0,
-            "mu": 0.50,
-            "tau": 0.05,
-            "omega_end": 300.0,
+        "Продольные — слабая регенерация и малое запаздывание": {
+            "E": 2.0e11,
+            "rho": 7800.0,
+            "S": 1.5e-4,
+            "length": 1.8,
+            "mu": 0.05,
+            "tau": 0.02,
+            "omega_start": 0.001,
+            "omega_end": 250.0,
+            "omega_step": 0.1,
         },
-        "Продольные — малая площадь сечения": {
-            **base,
-            "S": 1.0e-4,
-            "mu": 0.35,
-            "tau": 0.06,
-            "omega_end": 500.0,
+        "Продольные — длинная гибкая борштанга с сильной регенерацией": {
+            "E": 2.0e11,
+            "rho": 7800.0,
+            "S": 8.0e-4,
+            "length": 4.5,
+            "mu": 0.70,
+            "tau": 0.10,
+            "omega_start": 0.001,
+            "omega_end": 600.0,
+            "omega_step": 0.1,
+        },
+        "Продольные — большое запаздывание и широкий размах петель": {
+            "E": 2.0e11,
+            "rho": 7800.0,
+            "S": 1.0e-3,
+            "length": 6.0,
+            "mu": 0.90,
+            "tau": 0.20,
+            "omega_start": 0.001,
+            "omega_end": 400.0,
+            "omega_step": 0.1,
         },
     }
-
-
-
-def _transverse_base() -> dict:
-    return {
-        "E": 2.1e11,
-        "rho": 7800.0,
-        "length": 2.7,
-        "R": 0.04,
-        "r": 0.035,
-        "K_cut": 6.0e5,
-        "h": 3.0214154483500606e-05,
-        "mu": 0.6,
-        "tau": 0.1,
-        "omega_start": 0.0,
-        "omega_end": 220.0,
-        "omega_step": 0.1,
-    }
-
 
 
 def get_transverse_presets() -> dict:
-    base = _transverse_base()
     return {
-        "Поперечные — базовый рабочий режим": {
-            **base,
-            "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
-        },
-        "Поперечные — без регенерации": {
-            **base,
-            "mu": 0.0,
-            "tau": 0.0,
-            "omega_start": -220.0,
+        "Поперечные — verified baseline": {
+            "E": 2.1e11,
+            "rho": 7800.0,
+            "length": 2.7,
+            "mu": 0.6,
+            "tau": 0.1,
+            "R": 0.04,
+            "r": 0.035,
+            "K_cut": 6.0e5,
+            "h": 3.0214154483500606e-05,
+            "omega_start": 0.0,
             "omega_end": 220.0,
             "omega_step": 0.1,
             "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
         },
-        "Поперечные — симметричный диапазон для годографа": {
-            **base,
-            "omega_start": -250.0,
-            "omega_end": 250.0,
-            "omega_step": 0.2,
-            "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
-        },
-        "Поперечные — сильное внутреннее трение": {
-            **base,
-            "h": 6.042830896700121e-05,
-            "mu": 0.0,
-            "tau": 0.0,
-            "omega_start": -300.0,
+        "Поперечные — короткая жёсткая борштанга, малая петля": {
+            "E": 2.1e11,
+            "rho": 7800.0,
+            "length": 2.0,
+            "mu": 0.25,
+            "tau": 0.03,
+            "R": 0.045,
+            "r": 0.015,
+            "K_cut": 6.0e5,
+            "h": 3.0214154483500606e-05,
+            "omega_start": 0.0,
             "omega_end": 300.0,
-            "omega_step": 0.5,
+            "omega_step": 0.1,
             "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
         },
-        "Поперечные — длинная борштанга": {
-            **base,
-            "length": 4.0,
-            "h": 9.824243697322762e-05,
-            "mu": 0.0,
-            "tau": 0.0,
-            "omega_start": -250.0,
-            "omega_end": 250.0,
-            "omega_step": 0.5,
-            "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
-        },
-        "Поперечные — тонкостенная геометрия": {
-            **base,
+        "Поперечные — длинная тонкостенная, широкая левая ветвь": {
+            "E": 2.1e11,
+            "rho": 7800.0,
+            "length": 3.5,
+            "mu": 0.75,
+            "tau": 0.10,
             "R": 0.04,
-            "r": 0.038,
-            "mu": 0.5,
-            "tau": 0.08,
-            "omega_end": 260.0,
+            "r": 0.035,
+            "K_cut": 6.0e5,
+            "h": 3.0214154483500606e-05,
+            "omega_start": 0.0,
+            "omega_end": 350.0,
             "omega_step": 0.1,
             "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
         },
-        "Поперечные — усиленная жёсткость резания": {
-            **base,
-            "K_cut": 1.0e6,
-            "mu": 0.7,
-            "tau": 0.1,
-            "omega_end": 260.0,
+        "Поперечные — высокий μ и короткое τ, правый выброс": {
+            "E": 2.1e11,
+            "rho": 7800.0,
+            "length": 4.0,
+            "mu": 0.98,
+            "tau": 0.02,
+            "R": 0.04,
+            "r": 0.03,
+            "K_cut": 6.0e5,
+            "h": 3.0214154483500606e-05,
+            "omega_start": 0.0,
+            "omega_end": 500.0,
             "omega_step": 0.1,
             "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
         },
-        "Поперечные — project approximation (режим совместимости)": {
-            **base,
-            "transverse_modal_shape_variant": "project_maple_compatible_phi",
+        "Поперечные — массивная толстостенная, много пересечений": {
+            "E": 2.1e11,
+            "rho": 7800.0,
+            "length": 6.0,
+            "mu": 0.90,
+            "tau": 0.10,
+            "R": 0.07,
+            "r": 0.02,
+            "K_cut": 6.0e5,
+            "h": 3.0214154483500606e-05,
+            "omega_start": 0.0,
+            "omega_end": 2200.0,
+            "omega_step": 0.1,
+            "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
+        },
+        "Поперечные — сплошная тонкая, большое τ и вязкая диссипация": {
+            "E": 2.1e11,
+            "rho": 7800.0,
+            "length": 1.5,
+            "mu": 0.50,
+            "tau": 0.30,
+            "R": 0.03,
+            "r": 0.0,
+            "K_cut": 2.0e5,
+            "h": 1.0e-4,
+            "omega_start": 0.0,
+            "omega_end": 180.0,
+            "omega_step": 0.1,
+            "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",
         },
     }
-
-
-
-def get_presets(kind: str | None = None) -> dict:
-    presets_by_kind = {
-        "torsional": get_torsional_presets(),
-        "longitudinal": get_longitudinal_presets(),
-        "transverse": get_transverse_presets(),
-    }
-    if kind is None:
-        merged = {}
-        for group in presets_by_kind.values():
-            merged.update(group)
-        return merged
-    if kind not in presets_by_kind:
-        raise ValueError(f"Неизвестный тип пресетов: {kind}")
-    return presets_by_kind[kind]

@@ -18,7 +18,6 @@ class BoreBarModel:
 
     Основные методы:
         - calculate_torsional(params):      крутильные колебания, кривая D-разбиения σ(p);
-        - find_intersection(params):        поиск пересечения Im σ(p) = 0;
         - calculate_longitudinal(params):   продольные колебания, кривая K1–δ;
         - calculate_transverse(params):     поперечные колебания, годограф W(p).
     """
@@ -148,7 +147,87 @@ class BoreBarModel:
             return 0.5 * (x1 + x2)
         return x1 - y1 * (x2 - x1) / (y2 - y1)
 
+    @staticmethod
+    def _refine_root_on_interval(func, x1: float, y1: float, x2: float, y2: float, *, xtol: float = 1e-10) -> float:
+        """Уточнить корень на отрезке [x1, x2] методом Брента, если это возможно.
 
+        Если функция ведёт себя плохо или на концах нет строгой смены знака,
+        безопасно возвращается линейная оценка.
+        """
+        x1 = float(x1)
+        x2 = float(x2)
+        y1 = float(y1)
+        y2 = float(y2)
+
+        if not (np.isfinite(x1) and np.isfinite(x2) and np.isfinite(y1) and np.isfinite(y2)):
+            return BoreBarModel._linear_root(x1, y1, x2, y2)
+        if x2 <= x1:
+            return BoreBarModel._linear_root(x1, y1, x2, y2)
+        if abs(y1) <= xtol:
+            return x1
+        if abs(y2) <= xtol:
+            return x2
+        if y1 * y2 >= 0.0:
+            return BoreBarModel._linear_root(x1, y1, x2, y2)
+
+        try:
+            sol = root_scalar(func, bracket=[x1, x2], method='brentq', xtol=xtol)
+            if sol.converged and np.isfinite(sol.root):
+                return float(sol.root)
+        except Exception:
+            pass
+        return BoreBarModel._linear_root(x1, y1, x2, y2)
+
+    @staticmethod
+    def _deduplicate_special_points(points: list[dict], *, omega_tol: float, re_tol: float) -> list[dict]:
+        dedup = []
+        for p in sorted(points, key=lambda item: (item['omega'], item['re'])):
+            if dedup and abs(p['omega'] - dedup[-1]['omega']) <= omega_tol and abs(p['re'] - dedup[-1]['re']) <= re_tol:
+                continue
+            dedup.append(p)
+        return dedup
+
+    @staticmethod
+    def _build_zero_crossing_points(x: np.ndarray, re_values: np.ndarray, im_values: np.ndarray, *,
+                                    zero_eps: float, omega_tol: float, re_tol: float,
+                                    refine_func=None, re_eval_func=None, re_key: str = 're') -> list[dict]:
+        x = np.asarray(x, dtype=float)
+        re_values = np.asarray(re_values, dtype=float)
+        im_values = np.asarray(im_values, dtype=float)
+
+        points = []
+        finite_zero = np.isfinite(x) & np.isfinite(re_values) & np.isfinite(im_values) & (np.abs(im_values) <= zero_eps)
+        for idx in np.where(finite_zero)[0]:
+            w = float(x[idx])
+            r = float(re_values[idx])
+            points.append({
+                'omega': w,
+                re_key: r,
+                're': r,
+                'im': 0.0,
+                'frequency': float(w / (2.0 * np.pi)),
+            })
+
+        for i, j in BoreBarModel._sign_change_intervals(x, im_values):
+            w1, w2 = float(x[i]), float(x[j])
+            y1, y2 = float(im_values[i]), float(im_values[j])
+            if refine_func is not None:
+                w0 = BoreBarModel._refine_root_on_interval(refine_func, w1, y1, w2, y2)
+            else:
+                w0 = BoreBarModel._linear_root(w1, y1, w2, y2)
+            if re_eval_func is not None:
+                r0 = float(re_eval_func(w0))
+            else:
+                r0 = float(np.interp(w0, [w1, w2], [re_values[i], re_values[j]]))
+            points.append({
+                'omega': float(w0),
+                re_key: r0,
+                're': r0,
+                'im': 0.0,
+                'frequency': float(w0 / (2.0 * np.pi)),
+            })
+
+        return BoreBarModel._deduplicate_special_points(points, omega_tol=omega_tol, re_tol=re_tol)
 
     @staticmethod
     def _require_finite_scalar(value, name: str) -> float:
@@ -278,15 +357,12 @@ class BoreBarModel:
             if h < 0.0:
                 raise ValueError("Коэффициент внутреннего трения h не может быть отрицательным.")
             validated["h"] = h
-        if "beta" in validated and validated.get("beta") is not None:
-            beta = BoreBarModel._require_finite_scalar(validated["beta"], "beta")
-            if beta < 0.0:
-                raise ValueError("Коэффициент β не может быть отрицательным.")
-            validated["beta"] = beta
-
         variant = str(validated.get("transverse_modal_shape_variant", "verified_cantilever_first_mode_phi"))
-        if variant not in {"verified_cantilever_first_mode_phi", "project_maple_compatible_phi"}:
-            raise ValueError(f"Неизвестный вариант поперечной формы: {variant}")
+        if variant != "verified_cantilever_first_mode_phi":
+            raise ValueError(
+                "Поперечная модель поддерживает только verified_cantilever_first_mode_phi; "
+                f"получено: {variant}"
+            )
         validated["transverse_modal_shape_variant"] = variant
 
         BoreBarModel._validate_frequency_params(validated)
@@ -508,7 +584,7 @@ class BoreBarModel:
 
         robust_q = float(params.get("display_outlier_quantile", 0.995))
         robust_expand = float(params.get("display_outlier_expand", 4.0))
-        use_robust_filter = bool(params.get("display_filter_outliers", True))
+        use_robust_filter = bool(params.get("display_filter_outliers", False))
 
         display_outlier_mask = np.zeros_like(re_display_pos, dtype=bool)
         thr_re = None
@@ -564,6 +640,308 @@ class BoreBarModel:
             "display_outlier_quantile": robust_q if use_robust_filter else None,
             "display_outlier_expand": robust_expand if use_robust_filter else None,
             "display_outlier_policy": "robust_nan_gap_filter" if use_robust_filter else "disabled",
+        }
+
+
+    @staticmethod
+    def build_torsional_plot_im0_from_result(result: dict, params: dict, semantic_im0: dict | None = None) -> dict:
+        """Построить plot-special-points по той же дискретной physical-ветви, что и полилиния.
+
+        Используется только для графического совмещения маркеров с отображаемой
+        sampled-ветвью: семантические special points модели и экспорта не меняются.
+        """
+        omega = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
+        sig_re = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
+        sig_im = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
+
+        points = []
+        eps = float(params.get("im0_eps_torsional", 1e-9))
+        finite_zero = np.isfinite(omega) & np.isfinite(sig_re) & np.isfinite(sig_im) & (np.abs(sig_im) <= eps)
+        for idx in np.where(finite_zero)[0]:
+            w = float(omega[idx])
+            points.append({
+                "omega": w,
+                "re": float(sig_re[idx]),
+                "im": 0.0,
+                "frequency": float(w / (2.0 * np.pi)),
+            })
+
+        for i, j in BoreBarModel._sign_change_intervals(omega, sig_im):
+            w1, w2 = float(omega[i]), float(omega[j])
+            y1, y2 = float(sig_im[i]), float(sig_im[j])
+            w0 = float(BoreBarModel._linear_root(w1, y1, w2, y2))
+            re0 = float(np.interp(w0, [w1, w2], [sig_re[i], sig_re[j]]))
+            points.append({
+                "omega": w0,
+                "re": re0,
+                "im": 0.0,
+                "frequency": float(w0 / (2.0 * np.pi)),
+            })
+
+        omega_tol = float(params.get("im0_omega_tol_torsional", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
+        re_tol = float(params.get("im0_re_tol_torsional", 1e-6))
+        dedup = BoreBarModel._deduplicate_special_points(points, omega_tol=omega_tol, re_tol=re_tol)
+
+        semantic = semantic_im0 or {}
+        research_sem = semantic.get("research_critical_point")
+        minre_sem = semantic.get("minimum_re_critical_point")
+
+        def _match_plot_point(target: dict | None) -> dict | None:
+            if not target or not dedup:
+                return None
+            tw = float(target.get("omega", np.nan))
+            if not np.isfinite(tw):
+                return None
+            return min(
+                dedup,
+                key=lambda p: (
+                    abs(float(p["omega"]) - tw),
+                    abs(float(p["re"]) - float(target.get("re", p["re"]))),
+                ),
+            )
+
+        research_plot = _match_plot_point(research_sem)
+        minre_plot = _match_plot_point(minre_sem)
+
+        return {
+            "points": dedup,
+            "critical": research_plot,
+            "research_critical_point": research_plot,
+            "minimum_re_critical_point": minre_plot,
+            "source_curve": "physical_sampled_branch_for_plot",
+        }
+
+    @staticmethod
+    def _augment_torsional_positive_branch_with_special_points(result: dict, params: dict, points: list[dict] | None) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        """Вставить physical special points в положительную ветвь в порядке ω."""
+        omega_pos = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
+        re_pos = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
+        im_pos = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
+
+        if omega_pos.size == 0 or not points:
+            return omega_pos.copy(), re_pos.copy(), im_pos.copy(), 0
+
+        step = float(params.get("omega_step", 1.0))
+        omega_tol = float(max(1e-12, step * 1e-9))
+
+        items: list[tuple[float, float, float, int]] = []
+        for w, r, i in zip(omega_pos, re_pos, im_pos):
+            if np.isfinite(w) and np.isfinite(r) and np.isfinite(i):
+                items.append((float(w), float(r), float(i), 0))
+
+        inserted_count = 0
+        for p in points:
+            w = float(p.get("omega", np.nan))
+            r = float(p.get("re", np.nan))
+            i = float(p.get("im", 0.0))
+            if not (np.isfinite(w) and np.isfinite(r) and np.isfinite(i)):
+                continue
+            if w <= 0.0:
+                continue
+            items.append((w, r, i, 1))
+            inserted_count += 1
+
+        if not items:
+            return omega_pos.copy(), re_pos.copy(), im_pos.copy(), 0
+
+        items.sort(key=lambda t: (t[0], t[3]))
+
+        merged: list[tuple[float, float, float]] = []
+        for w, r, i, is_special in items:
+            if merged and abs(w - merged[-1][0]) <= omega_tol:
+                if is_special:
+                    merged[-1] = (w, r, i)
+                continue
+            merged.append((w, r, i))
+
+        omega_aug = np.asarray([t[0] for t in merged], dtype=float)
+        re_aug = np.asarray([t[1] for t in merged], dtype=float)
+        im_aug = np.asarray([t[2] for t in merged], dtype=float)
+        return omega_aug, re_aug, im_aug, inserted_count
+
+    @staticmethod
+    def build_torsional_display_curve_from_result(result: dict, params: dict, points: list[dict] | None = None) -> dict:
+        omega_pos, re_pos, im_pos, inserted_count = BoreBarModel._augment_torsional_positive_branch_with_special_points(result, params, points)
+
+        if omega_pos.size == 0:
+            empty = np.array([], dtype=float)
+            return {
+                "omega": empty,
+                "re": empty,
+                "im": empty,
+                "inserted_special_points": 0,
+                "policy": "display_rebuilt_from_physical_branch_no_points",
+            }
+
+        if float(params.get("omega_start", 0.0)) < 0.0:
+            omega = np.concatenate([-omega_pos[::-1], omega_pos])
+            re = np.concatenate([re_pos[::-1], re_pos])
+            im = np.concatenate([-im_pos[::-1], im_pos])
+            policy = "display_rebuilt_as_exact_conjugate_mirror_of_physical_positive_branch"
+        else:
+            omega = omega_pos.copy()
+            re = re_pos.copy()
+            im = im_pos.copy()
+            policy = "display_rebuilt_from_physical_positive_branch"
+
+        return {
+            "omega": omega,
+            "re": re,
+            "im": im,
+            "inserted_special_points": int(inserted_count),
+            "policy": policy,
+        }
+
+    @staticmethod
+    def build_torsional_plot_policy(display_curve: dict, points=None, critical=None) -> dict:
+        re = np.asarray(display_curve.get("re", []), dtype=float)
+        im = np.asarray(display_curve.get("im", []), dtype=float)
+        finite = np.isfinite(re) & np.isfinite(im)
+
+        if np.count_nonzero(finite) < 2:
+            return {
+                "xlim": (-1.0, 1.0),
+                "ylim": (-1.0, 1.0),
+                "y_clip": (-1.0, 1.0),
+                "origin_band_left": 0.0,
+                "mode": "fallback_empty",
+            }
+
+        x_all = re[finite]
+        y_all = im[finite]
+
+        if points:
+            px = np.asarray([p["re"] for p in points if np.isfinite(p.get("re", np.nan))], dtype=float)
+            if px.size:
+                x_all = np.concatenate([x_all, px])
+        if critical and np.isfinite(critical.get("re", np.nan)):
+            x_all = np.concatenate([x_all, np.asarray([float(critical["re"])], dtype=float)])
+
+        xmin = float(np.min(x_all))
+        xmax = float(np.max(x_all))
+        xspan = max(xmax - xmin, 1e-9)
+        xpad = xspan * 0.08
+        xlim = (xmin - xpad, xmax + xpad)
+
+        origin_band_fraction = 0.06
+        origin_band_left = xmax - xspan * origin_band_fraction
+
+        non_origin_mask = finite & (re < origin_band_left)
+        if np.count_nonzero(non_origin_mask) >= 8:
+            y_for_view = np.abs(im[non_origin_mask])
+            mode = "origin_only_segment_clip"
+        else:
+            y_for_view = np.abs(y_all)
+            mode = "fallback_full_curve_no_origin_separation"
+
+        ymax_visible = float(np.max(y_for_view)) if y_for_view.size else float(np.max(np.abs(y_all)))
+        ymax_visible = max(ymax_visible, 1e-9)
+
+        y_clip_max = ymax_visible * 1.03
+        y_window_max = ymax_visible * 1.12
+
+        return {
+            "xlim": xlim,
+            "ylim": (-y_window_max, y_window_max),
+            "y_clip": (-y_clip_max, y_clip_max),
+            "origin_band_left": origin_band_left,
+            "mode": mode,
+        }
+
+    @staticmethod
+    def _clip_segment_to_horizontal_strip(x1, y1, x2, y2, ylo, yhi):
+        eps = 1e-15
+        dy = y2 - y1
+
+        if abs(dy) <= eps:
+            if ylo <= y1 <= yhi:
+                return [(x1, y1), (x2, y2)], False
+            return [], True
+
+        t_a = (ylo - y1) / dy
+        t_b = (yhi - y1) / dy
+        t_enter = max(0.0, min(t_a, t_b))
+        t_exit = min(1.0, max(t_a, t_b))
+
+        if t_enter > t_exit:
+            return [], True
+
+        xa = x1 + (x2 - x1) * t_enter
+        ya = y1 + dy * t_enter
+        xb = x1 + (x2 - x1) * t_exit
+        yb = y1 + dy * t_exit
+
+        partial = not (np.isclose(t_enter, 0.0) and np.isclose(t_exit, 1.0))
+        return [(xa, ya), (xb, yb)], partial
+
+    @staticmethod
+    def build_torsional_plot_curve(display_curve: dict, plot_policy: dict) -> dict:
+        re = np.asarray(display_curve.get("re", []), dtype=float)
+        im = np.asarray(display_curve.get("im", []), dtype=float)
+        n = re.size
+
+        ylo, yhi = plot_policy["y_clip"]
+        origin_band_left = float(plot_policy["origin_band_left"])
+
+        out_x = []
+        out_y = []
+        clipped_segments = 0
+
+        def append_point(xv, yv):
+            if out_x and np.isfinite(out_x[-1]) and np.isfinite(out_y[-1]):
+                if np.isclose(out_x[-1], xv) and np.isclose(out_y[-1], yv):
+                    return
+            out_x.append(float(xv))
+            out_y.append(float(yv))
+
+        def append_gap():
+            if not out_x or np.isfinite(out_x[-1]) or np.isfinite(out_y[-1]):
+                out_x.append(np.nan)
+                out_y.append(np.nan)
+
+        if n == 0:
+            return {
+                "re": np.array([], dtype=float),
+                "im": np.array([], dtype=float),
+                "clipped_count": 0,
+                "policy": "origin_only_segment_clip_no_points",
+            }
+
+        for i in range(n - 1):
+            x1, y1 = re[i], im[i]
+            x2, y2 = re[i + 1], im[i + 1]
+
+            if not (np.isfinite(x1) and np.isfinite(y1) and np.isfinite(x2) and np.isfinite(y2)):
+                append_gap()
+                continue
+
+            near_origin_spike_zone = max(x1, x2) >= origin_band_left
+
+            if not near_origin_spike_zone:
+                append_point(x1, y1)
+                append_point(x2, y2)
+                continue
+
+            kept, partial = BoreBarModel._clip_segment_to_horizontal_strip(x1, y1, x2, y2, ylo, yhi)
+            if not kept:
+                clipped_segments += 1
+                append_gap()
+                continue
+
+            if partial:
+                clipped_segments += 1
+                append_point(*kept[0])
+                append_point(*kept[-1])
+                append_gap()
+            else:
+                append_point(*kept[0])
+                append_point(*kept[-1])
+
+        return {
+            "re": np.asarray(out_x, dtype=float),
+            "im": np.asarray(out_y, dtype=float),
+            "clipped_count": int(clipped_segments),
+            "policy": "segment_clip_only_for_spikes_near_origin",
         }
 
     def calculate_torsional(self, params: dict) -> dict:
@@ -763,37 +1141,27 @@ class BoreBarModel:
         sig_re = np.asarray(res["physical_sigma_real"], dtype=float)
         sig_im = np.asarray(res["physical_sigma_imag"], dtype=float)
 
-        points = []
         eps = float(params.get("im0_eps_torsional", 1e-9))
-        finite_zero = np.isfinite(omega) & np.isfinite(sig_re) & np.isfinite(sig_im) & (np.abs(sig_im) <= eps)
-        for idx in np.where(finite_zero)[0]:
-            w = float(omega[idx])
-            points.append({
-                "omega": w,
-                "re": float(sig_re[idx]),
-                "im": 0.0,
-                "frequency": float(w / (2.0 * np.pi)),
-            })
-
-        for i, j in BoreBarModel._sign_change_intervals(omega, sig_im):
-            w1, w2 = omega[i], omega[j]
-            y1, y2 = sig_im[i], sig_im[j]
-            w0 = BoreBarModel._linear_root(w1, y1, w2, y2)
-            re0 = np.interp(w0, [w1, w2], [sig_re[i], sig_re[j]])
-            points.append({
-                "omega": float(w0),
-                "re": float(re0),
-                "im": 0.0,
-                "frequency": float(w0 / (2.0 * np.pi)),
-            })
-
-        dedup = []
         omega_tol = float(params.get("im0_omega_tol_torsional", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
         re_tol = float(params.get("im0_re_tol_torsional", 1e-6))
-        for p in sorted(points, key=lambda item: (item["omega"], item["re"])):
-            if dedup and abs(p["omega"] - dedup[-1]["omega"]) <= omega_tol and abs(p["re"] - dedup[-1]["re"]) <= re_tol:
-                continue
-            dedup.append(p)
+
+        def im_func(w):
+            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
+            return float(im_v[0])
+
+        def re_func(w):
+            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
+            return float(re_v[0])
+
+        dedup = BoreBarModel._build_zero_crossing_points(
+            omega, sig_re, sig_im,
+            zero_eps=eps,
+            omega_tol=omega_tol,
+            re_tol=re_tol,
+            refine_func=im_func,
+            re_eval_func=re_func,
+            re_key="re",
+        )
 
         research_critical_point, policy_meta = BoreBarModel._select_torsional_research_critical_point(dedup, params)
         minimum_re_critical_point = min(dedup, key=lambda p: p["re"]) if dedup else None
@@ -802,30 +1170,56 @@ class BoreBarModel:
             "all_im0_points": dedup,
             "research_critical_point": research_critical_point,
             "minimum_re_critical_point": minimum_re_critical_point,
-            # legacy aliases for compatibility with existing GUI/export code
             "points": dedup,
-            "critical": research_critical_point,
             "source_curve": "physical_positive_branch",
             "critical_selection_policy": policy_meta,
         }
 
-    @staticmethod
-    def find_intersection(params: dict) -> dict | None:
+    def find_torsional_im0_points_from_result(self, params: dict, result: dict) -> dict:
         """
-        Совместимый интерфейс: возвращает критическую точку по исследовательскому
-        правилу, а не глобальный минимум Re среди всех пересечений Im(σ)=0.
+        Найти пересечения Im(σ)=0, используя уже посчитанную крутильную кривую.
+
+        Это устраняет лишний повторный расчёт в GUI и синхронизирует special
+        points с той же физической ветвью, которая уже была получена моделью.
         """
-        im0 = BoreBarModel.find_torsional_im0_points(params)
-        critical = im0.get("research_critical_point") or im0.get("critical")
-        if not critical:
-            return None
+        omega = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
+        sig_re = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
+        sig_im = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
+
+        eps = float(params.get("im0_eps_torsional", 1e-9))
+        omega_tol = float(params.get("im0_omega_tol_torsional", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
+        re_tol = float(params.get("im0_re_tol_torsional", 1e-6))
+
+        def im_func(w):
+            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
+            return float(im_v[0])
+
+        def re_func(w):
+            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
+            return float(re_v[0])
+
+        dedup = BoreBarModel._build_zero_crossing_points(
+            omega, sig_re, sig_im,
+            zero_eps=eps,
+            omega_tol=omega_tol,
+            re_tol=re_tol,
+            refine_func=im_func,
+            re_eval_func=re_func,
+            re_key="re",
+        )
+
+        research_critical_point, policy_meta = BoreBarModel._select_torsional_research_critical_point(dedup, params)
+        minimum_re_critical_point = min(dedup, key=lambda p: p["re"]) if dedup else None
 
         return {
-            "omega": float(critical["omega"]),
-            "re_sigma": float(critical["re"]),
-            "frequency": float(critical["frequency"]),
+            "all_im0_points": dedup,
+            "research_critical_point": research_critical_point,
+            "minimum_re_critical_point": minimum_re_critical_point,
+            "points": dedup,
+            "source_curve": "physical_positive_branch",
+            "critical_selection_policy": policy_meta,
         }
-    
+
     # -------------------------------------------------------------------------
     # Продольные колебания
     # -------------------------------------------------------------------------
@@ -889,7 +1283,9 @@ class BoreBarModel:
         else:
             omega = BoreBarModel.build_frequency_grid(params, include_endpoint=True)
 
-        K1, delta = BoreBarModel().compute_longitudinal_curve(params, omega)
+        curve_data = BoreBarModel().compute_longitudinal_curve(params, omega, return_diagnostics=True)
+        K1 = curve_data["K1"]
+        delta = curve_data["delta"]
 
         K1_0 = (E * S) / (L * (1.0 - mu))
         delta_0 = -(E * S * mu * tau) / (L * (1.0 - mu))
@@ -903,9 +1299,26 @@ class BoreBarModel:
             "K1_0": K1_0,
             "delta_0": delta_0,
             "a": a,
+            "invalid_mask": curve_data["invalid_mask"],
+            "invalid_reason_masks": curve_data["invalid_reason_masks"],
+            "invalid_reason_counts": curve_data["invalid_reason_counts"],
+            "invalid_point_count": curve_data["invalid_point_count"],
+            "numerics_metadata": curve_data["numerics_metadata"],
+            "model_variant": "si_wave_speed",
+            "longitudinal_model_regime": "research_si_interpretation",
+            "longitudinal_model_regime_label": "SI-интерпретация исследовательской постановки",
+            "longitudinal_model_scope": "research_aligned_generalized_si_form",
+            "longitudinal_model_note": (
+                "Продольная часть реализована как физически согласованная SI-формулировка "
+                "исследовательской модели K₁–δ; это не побуквенное копирование всех обозначений "
+                "исходного Matlab-фрагмента, а согласованная инженерная интерпретация формул."
+            ),
+            "research_alignment_status": "si_interpretation_of_research_formulas",
+            "curve_parameterization": "omega -> (K1(omega), delta(omega))",
+            "zero_frequency_limit_policy": "analytic_limits_used_for_summary_only",
         }
 
-    def compute_longitudinal_curve(self, params: dict, omega: np.ndarray):
+    def compute_longitudinal_curve(self, params: dict, omega: np.ndarray, return_diagnostics: bool = False):
         """Вернуть массивы (K1(ω), δ(ω)) для заданного omega.
 
         Нужен для экспорта и для поиска пересечений δ(ω)=0.
@@ -961,77 +1374,133 @@ class BoreBarModel:
         K1[valid] = (E * S / a) * omega[valid] * cot_x[valid] / denom[valid]
         delta[valid] = -(E * S * mu / a) * cot_x[valid] * np.sin(omega[valid] * tau) / denom[valid]
 
-        # Ограничим выбросы
         K1_max = float(params.get("K1_max_longitudinal", 1e10))
         delta_max = float(params.get("delta_max_longitudinal", 1e7))
-        bad = (np.abs(K1) > K1_max) | (np.abs(delta) > delta_max)
-        K1[bad] = np.nan
-        delta[bad] = np.nan
+        response_clip = (np.abs(K1) > K1_max) | (np.abs(delta) > delta_max)
+        K1[response_clip] = np.nan
+        delta[response_clip] = np.nan
+
+        invalid_reason_masks = {
+            "omega_nonfinite": ~np.isfinite(omega),
+            "cot_singularity": ~mask_cot,
+            "denominator_too_small": ~mask_denom,
+            "response_clip": np.asarray(response_clip, dtype=bool),
+            "response_nonfinite": ~(np.isfinite(K1) & np.isfinite(delta)),
+        }
+        invalid_mask = np.zeros_like(omega, dtype=bool)
+        for mask in invalid_reason_masks.values():
+            invalid_mask |= np.asarray(mask, dtype=bool)
+
+        if return_diagnostics:
+            return {
+                "K1": K1,
+                "delta": delta,
+                "invalid_mask": invalid_mask,
+                "invalid_reason_masks": invalid_reason_masks,
+                "invalid_reason_counts": self._count_true_map(invalid_reason_masks),
+                "invalid_point_count": int(np.count_nonzero(invalid_mask)),
+                "numerics_metadata": {
+                    "cot_eps": eps,
+                    "denominator_eps": eps,
+                    "K1_max_longitudinal": K1_max,
+                    "delta_max_longitudinal": delta_max,
+                },
+            }
 
         return K1, delta
 
+    def _evaluate_longitudinal_point(self, params: dict, omega_value: float) -> tuple[float, float]:
+        data = self.compute_longitudinal_curve(params, np.asarray([omega_value], dtype=float), return_diagnostics=True)
+        return float(data["K1"][0]), float(data["delta"][0])
+
     def find_longitudinal_im0_points(self, params) -> dict:
+        omega = BoreBarModel.build_frequency_grid(params, include_endpoint=True)
+        res = self.calculate_longitudinal({**params, "omega_override": omega})
+        return self.find_longitudinal_im0_points_from_result(params, res)
+
+    def _select_longitudinal_research_critical_point(self, points: list[dict], params: dict) -> tuple[dict | None, dict]:
+        """Выбрать исследовательскую критическую точку продольной модели.
+
+        Для согласованной SI-модели проекта критической считается точка δ(ω)=0
+        с минимальным значением K1 среди всех найденных пересечений.
+        """
+        policy = {
+            "kind": "minimum_K1_on_delta_zero_set",
+            "criterion": "min_K1",
+            "model_regime": "fixed_project_si_model",
+        }
+        if not points:
+            return None, {**policy, "selection_status": "no_im0_points"}
+
+        selected = min(points, key=lambda p: (float(p["K1"]), float(p["omega"])))
+        chosen = dict(selected)
+        chosen["delta"] = 0.0
+        return chosen, {**policy, "selection_status": "minimum_K1_point_selected"}
+
+    def find_longitudinal_im0_points_from_result(self, params: dict, result: dict) -> dict:
         """Найти все пересечения δ(ω)=0 и критическую точку на единой сетке.
 
         Используется та же частотная сетка, что и для анализа/экспорта.
         Сначала учитываются точные нули, попавшие в узлы сетки, затем —
         интервалы смены знака между соседними узлами.
+
+        Единый контракт special points для проекта:
+        - points
+        - research_critical_point
+        - minimum_re_critical_point
+        - source_curve
+        - critical_selection_policy
+
+        Поле critical временно сохраняется только как alias для совместимости.
         """
-        omega = BoreBarModel.build_frequency_grid(params, include_endpoint=True)
-        K1, delta = self.compute_longitudinal_curve(params, omega)
+        omega = np.asarray(result["omega"], dtype=float)
+        K1 = np.asarray(result["K1"], dtype=float)
+        delta = np.asarray(result["delta"], dtype=float)
 
-        omega = np.asarray(omega, dtype=float)
-        K1 = np.asarray(K1, dtype=float)
-        delta = np.asarray(delta, dtype=float)
-
-        points = []
         eps = float(params.get("im0_eps_longitudinal", 1e-9))
-
-        finite_zero = np.isfinite(omega) & np.isfinite(K1) & np.isfinite(delta) & (np.abs(delta) <= eps)
-        for idx in np.where(finite_zero)[0]:
-            w = float(omega[idx])
-            k = float(K1[idx])
-            points.append({
-                "omega": w,
-                "K1": k,
-                "delta": 0.0,
-                "re": k,
-                "im": 0.0,
-                "frequency": float(w / (2.0 * np.pi)),
-            })
-
-        for i, j in self._sign_change_intervals(omega, delta):
-            w1, w2 = omega[i], omega[j]
-            d1, d2 = delta[i], delta[j]
-            w0 = self._linear_root(w1, d1, w2, d2)
-            k0 = np.interp(w0, [w1, w2], [K1[i], K1[j]])
-            points.append({
-                "omega": float(w0),
-                "K1": float(k0),
-                "delta": 0.0,
-                "re": float(k0),
-                "im": 0.0,
-                "frequency": float(w0 / (2.0 * np.pi)),
-            })
-
-        dedup = []
         omega_tol = float(params.get("im0_omega_tol_longitudinal", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
         re_tol = float(params.get("im0_re_tol_longitudinal", 1e-6))
-        for p in sorted(points, key=lambda item: (item["omega"], item["re"])):
-            if dedup and abs(p["omega"] - dedup[-1]["omega"]) <= omega_tol and abs(p["re"] - dedup[-1]["re"]) <= re_tol:
-                continue
-            dedup.append(p)
 
-        critical = min(dedup, key=lambda p: p["K1"]) if dedup else None
-        return {"points": dedup, "critical": critical}
+        def delta_func(w):
+            return self._evaluate_longitudinal_point(params, w)[1]
+
+        def k1_func(w):
+            return self._evaluate_longitudinal_point(params, w)[0]
+
+        dedup = self._build_zero_crossing_points(
+            omega, K1, delta,
+            zero_eps=eps,
+            omega_tol=omega_tol,
+            re_tol=re_tol,
+            refine_func=delta_func,
+            re_eval_func=k1_func,
+            re_key="K1",
+        )
+
+        for point in dedup:
+            point["delta"] = 0.0
+
+        research_critical_point, policy_meta = self._select_longitudinal_research_critical_point(dedup, params)
+        minimum_re_critical_point = min(dedup, key=lambda p: (float(p["re"]), float(p["omega"]))) if dedup else None
+        if minimum_re_critical_point is not None:
+            minimum_re_critical_point = dict(minimum_re_critical_point)
+            minimum_re_critical_point["delta"] = 0.0
+
+        return {
+            "points": dedup,
+            "research_critical_point": research_critical_point,
+            "minimum_re_critical_point": minimum_re_critical_point,
+            "critical": research_critical_point,
+            "source_curve": "direct_longitudinal_curve",
+            "critical_selection_policy": policy_meta,
+        }
 
     def _get_transverse_modal_data(self, params: dict) -> dict:
         """
         Вычислить модальные коэффициенты поперечной модели.
 
-        Поддерживаются два явных варианта формы:
-        - verified_cantilever_first_mode_phi: верифицированная 1-я собственная форма консольной балки;
-        - project_maple_compatible_phi: старая проектная аппроксимация для совместимости.
+        Поддерживается единственный пользовательский вариант формы:
+        - verified_cantilever_first_mode_phi: верифицированная 1-я собственная форма консольной балки.
         """
         params = self.validate_transverse_params(params)
 
@@ -1051,6 +1520,14 @@ class BoreBarModel:
             lambda1 = float(params.get("transverse_lambda1", 1.875104068711961))
             k1 = lambda1 / L
             eta = (np.cosh(lambda1) + np.cos(lambda1)) / (np.sinh(lambda1) + np.sin(lambda1))
+            transverse_model_regime = "research_verified_mode"
+            transverse_model_regime_label = "Исследовательский режим: верифицированная собственная форма"
+            transverse_model_scope = "research_model"
+            transverse_model_note = (
+                "Используется верифицированная первая собственная форма консольной балки Эйлера–Бернулли; "
+                "это исследовательская одномодовая модель, а не режим совместимости с Maple."
+            )
+            research_alignment_status = "verified_mode_not_maple_reproduction"
 
             def raw_phi(x: np.ndarray) -> np.ndarray:
                 x = np.asarray(x, dtype=float)
@@ -1069,27 +1546,11 @@ class BoreBarModel:
             modal_shape_source = "verified_cantilever_first_mode_phi"
             modal_shape_description = "Первая собственная форма консольной балки Эйлера–Бернулли, нормировка phi(L)=1"
             shape_normalization = "phi(L)=1"
-        elif variant == "project_maple_compatible_phi":
-            lambda1 = 1.875
-            k1 = lambda1 / L
-            eta = None
-            C = float(params.get("transverse_shape_C", 0.7340955137589128))
-
-            def raw_phi(x: np.ndarray) -> np.ndarray:
-                x = np.asarray(x, dtype=float)
-                z = k1 * x
-                return np.sinh(z) - np.sin(z)
-
-            def raw_phi_pp(x: np.ndarray) -> np.ndarray:
-                x = np.asarray(x, dtype=float)
-                z = k1 * x
-                return (k1 ** 2) * (np.sinh(z) + np.sin(z))
-
-            modal_shape_source = "project_maple_compatible_phi"
-            modal_shape_description = "Старая проектная Maple-совместимая аппроксимация, оставлена как режим совместимости"
-            shape_normalization = "fixed_C"
         else:
-            raise ValueError(f"Неизвестный вариант поперечной формы: {variant}")
+            raise ValueError(
+                "Поперечная модель поддерживает только verified_cantilever_first_mode_phi; "
+                f"получено: {variant}"
+            )
 
         def phi(x: np.ndarray) -> np.ndarray:
             return C * raw_phi(x)
@@ -1108,15 +1569,10 @@ class BoreBarModel:
         gamma = float(E * J * modal_curvature_integral)
 
         h_explicit = params.get("h", None)
-        beta_legacy = params.get("beta", None)
         if h_explicit is not None:
             h = float(h_explicit)
             beta = float(h * gamma)
             damping_source = "h"
-        elif beta_legacy is not None:
-            beta = float(beta_legacy)
-            h = float(beta / gamma) if gamma != 0.0 else np.nan
-            damping_source = "legacy_beta"
         else:
             h = 3.0214154483500606e-05
             beta = float(h * gamma)
@@ -1149,24 +1605,126 @@ class BoreBarModel:
             "lambda1": float(lambda1),
             "shape_eta": None if eta is None else float(eta),
             "damping_source": damping_source,
-            "model_variant": (
-                "galerkin_one_mode_verified_shape"
-                if variant == "verified_cantilever_first_mode_phi"
-                else "galerkin_one_mode_project_shape"
-            ),
+            "transverse_model_regime": transverse_model_regime,
+            "transverse_model_regime_label": transverse_model_regime_label,
+            "transverse_model_scope": transverse_model_scope,
+            "transverse_model_note": transverse_model_note,
+            "research_alignment_status": research_alignment_status,
+            "model_variant": "galerkin_one_mode_verified_shape",
         }
+
+    def _evaluate_transverse_response(self, params: dict, omega: np.ndarray, modal: dict | None = None, *, return_full: bool = False):
+        """Низкоуровневый расчёт W(iω) на произвольной сетке без повторной полной сборки модели."""
+        params = self.validate_transverse_params(params)
+        if modal is None:
+            modal = self._get_transverse_modal_data(params)
+
+        mu = float(params["mu"])
+        tau = float(params["tau"])
+        K_cut = float(params.get("K_cut", 6e5))
+
+        alpha = float(modal["alpha"])
+        beta = float(modal["beta"])
+        gamma = float(modal["gamma"])
+        phi_L = float(modal["phi_L"])
+
+        omega = np.asarray(omega, dtype=float)
+        p = 1j * omega
+        denom_eps = float(params.get("transverse_denom_eps", 1e-12))
+        response_clip = float(params.get("transverse_response_clip", 1e8))
+        if response_clip <= 0.0:
+            response_clip = None
+
+        with np.errstate(all="ignore"):
+            numerator = (phi_L ** 2) * K_cut * (1.0 - mu * np.exp(-p * tau))
+            denom = alpha * p ** 2 + beta * p + gamma
+            denom_too_small = np.isfinite(denom.real) & np.isfinite(denom.imag) & (np.abs(denom) < denom_eps)
+            denom_safe = np.where(denom_too_small, np.nan + 1j * np.nan, denom)
+            W = numerator / denom_safe
+
+        omega_nonfinite = ~np.isfinite(omega)
+        response_nonfinite = ~(np.isfinite(W.real) & np.isfinite(W.imag))
+        if response_clip is None:
+            response_clip_mask = np.zeros(W.shape, dtype=bool)
+        else:
+            response_clip_mask = (
+                ~response_nonfinite
+                & ((np.abs(W.real) > response_clip) | (np.abs(W.imag) > response_clip))
+            )
+
+        invalid_reason_masks = {
+            "omega_nonfinite": np.asarray(omega_nonfinite, dtype=bool),
+            "denom_too_small": np.asarray(denom_too_small, dtype=bool),
+            "response_nonfinite": np.asarray(response_nonfinite, dtype=bool),
+            "response_clip": np.asarray(response_clip_mask, dtype=bool),
+        }
+        invalid_mask = np.zeros(W.shape, dtype=bool)
+        for mask in invalid_reason_masks.values():
+            invalid_mask |= np.asarray(mask, dtype=bool)
+
+        W_clean = np.asarray(W, dtype=complex).copy()
+        W_clean[invalid_mask] = np.nan + 1j * np.nan
+
+        payload = {
+            "omega": np.asarray(omega, dtype=float),
+            "W_real": np.asarray(W_clean.real, dtype=float),
+            "W_imag": np.asarray(W_clean.imag, dtype=float),
+            "invalid_mask": invalid_mask,
+            "invalid_reason_masks": invalid_reason_masks,
+            "invalid_reason_counts": self._count_true_map(invalid_reason_masks),
+            "invalid_point_count": int(np.count_nonzero(invalid_mask)),
+            "numerics_metadata": {
+                "transverse_denom_eps": denom_eps,
+                "transverse_response_clip": response_clip,
+            },
+        }
+        if return_full:
+            payload.update({
+                "alpha": alpha,
+                "beta": beta,
+                "gamma": gamma,
+                "h": modal["h"],
+                "phi_L": phi_L,
+                "K_cut": K_cut,
+                "R": modal["R"],
+                "r": modal["r"],
+                "J": modal["J"],
+                "S": modal["S"],
+                "k1": modal["k1"],
+                "shape_scale_C": modal["shape_scale_C"],
+                "modal_shape_variant": modal["modal_shape_variant"],
+                "modal_shape_source": modal["modal_shape_source"],
+                "modal_shape_description": modal["modal_shape_description"],
+                "shape_normalization": modal["shape_normalization"],
+                "lambda1": modal["lambda1"],
+                "shape_eta": modal["shape_eta"],
+                "modal_mass_integral": modal["modal_mass_integral"],
+                "modal_curvature_integral": modal["modal_curvature_integral"],
+                "damping_source": modal["damping_source"],
+                "model_variant": modal["model_variant"],
+                "transverse_model_regime": modal.get("transverse_model_regime"),
+                "transverse_model_regime_label": modal.get("transverse_model_regime_label"),
+                "transverse_model_scope": modal.get("transverse_model_scope"),
+                "transverse_model_note": modal.get("transverse_model_note"),
+                "research_alignment_status": modal.get("research_alignment_status"),
+            })
+        return payload
 
     def compute_transverse_curve(self, params: dict, omega: np.ndarray):
         """Вернуть (Re(W(iω)), Im(W(iω))) на заданной сетке omega."""
-        result = self.calculate_transverse({**params, "omega_override": np.asarray(omega, dtype=float)})
+        modal = self._get_transverse_modal_data(params)
+        result = self._evaluate_transverse_response(params, np.asarray(omega, dtype=float), modal=modal, return_full=False)
         return np.asarray(result["W_real"], dtype=float), np.asarray(result["W_imag"], dtype=float)
 
     def build_transverse_display_curve(self, params: dict) -> dict:
-        """
-        Построить более плотную сетку только для отображения годографа.
-        Экспортная/физическая сетка при этом не меняется.
-        """
         base = self.calculate_transverse(params)
+        return self.build_transverse_display_curve_from_result(params, base)
+
+    def build_transverse_display_curve_from_result(self, params: dict, base: dict) -> dict:
+        """
+        Построить более плотную сетку только для отображения годографа,
+        используя уже рассчитанную базовую кривую без повторной полной сборки модели.
+        """
         base_omega = np.asarray(base["omega"], dtype=float)
         factor = int(params.get("display_refinement_factor_transverse", params.get("display_refinement_factor", 8)))
         max_points = int(params.get("display_max_points_transverse", 25000))
@@ -1180,9 +1738,43 @@ class BoreBarModel:
                 "refined": False,
                 "base_point_count": int(base_omega.size),
                 "display_point_count": int(base_omega.size),
+                "solver_path": "reuse_base_curve_without_resampling",
             }
 
-        dense = self.calculate_transverse({**params, "omega_override": display_omega})
+        modal = {
+            "alpha": float(base["alpha"]),
+            "beta": float(base["beta"]),
+            "gamma": float(base["gamma"]),
+            "h": float(base["h"]),
+            "phi_L": float(base["phi_L"]),
+            "R": float(base["R"]),
+            "r": float(base["r"]),
+            "J": float(base["J"]),
+            "S": float(base["S"]),
+            "k1": float(base["k1"]),
+            "shape_scale_C": float(base["shape_scale_C"]),
+            "modal_shape_variant": base["modal_shape_variant"],
+            "modal_shape_source": base["modal_shape_source"],
+            "modal_shape_description": base["modal_shape_description"],
+            "shape_normalization": base["shape_normalization"],
+            "lambda1": float(base["lambda1"]),
+            "shape_eta": base["shape_eta"],
+            "modal_mass_integral": float(base["modal_mass_integral"]),
+            "modal_curvature_integral": float(base["modal_curvature_integral"]),
+            "damping_source": base["damping_source"],
+            "model_variant": base["model_variant"],
+            "transverse_model_regime": base.get("transverse_model_regime"),
+            "transverse_model_regime_label": base.get("transverse_model_regime_label"),
+            "transverse_model_scope": base.get("transverse_model_scope"),
+            "transverse_model_note": base.get("transverse_model_note"),
+            "research_alignment_status": base.get("research_alignment_status"),
+        }
+        dense = self._evaluate_transverse_response(
+            params,
+            np.asarray(display_omega, dtype=float),
+            modal=modal,
+            return_full=False,
+        )
         return {
             "omega": np.asarray(dense["omega"], dtype=float),
             "W_real": np.asarray(dense["W_real"], dtype=float),
@@ -1190,6 +1782,70 @@ class BoreBarModel:
             "refined": True,
             "base_point_count": int(base_omega.size),
             "display_point_count": int(display_omega.size),
+            "solver_path": "reuse_modal_data_with_dense_response_only",
+        }
+
+    def build_transverse_plot_im0_from_result(
+        self,
+        params: dict,
+        result: dict,
+        semantic_im0: dict | None = None,
+        display_curve: dict | None = None,
+    ) -> dict:
+        """Построить plot-special-points по той же sampled display-кривой, что и GUI.
+
+        Это нужно не для изменения семантики critical point, а чтобы маркеры
+        попадали в ту же дискретизированную полилинию, которую пользователь видит
+        на экране. Иначе при плотной/перестроенной display-сетке точка может
+        визуально казаться «съехавшей» с годографа.
+        """
+        if display_curve is None:
+            display_curve = self.build_transverse_display_curve_from_result(params, result)
+
+        omega = np.asarray(display_curve.get("omega", []), dtype=float)
+        Wre = np.asarray(display_curve.get("W_real", []), dtype=float)
+        Wim = np.asarray(display_curve.get("W_imag", []), dtype=float)
+
+        eps = float(params.get("im0_eps_transverse", 1e-9))
+        omega_tol = float(params.get("plot_im0_omega_tol_transverse", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
+        re_tol = float(params.get("plot_im0_re_tol_transverse", 1e-6))
+
+        plot_points = self._build_zero_crossing_points(
+            omega,
+            Wre,
+            Wim,
+            zero_eps=eps,
+            omega_tol=omega_tol,
+            re_tol=re_tol,
+            refine_func=None,
+            re_eval_func=None,
+            re_key="re",
+        )
+
+        semantic = semantic_im0 or {}
+        semantic_research = semantic.get("research_critical_point")
+        semantic_min_re = semantic.get("minimum_re_critical_point")
+
+        def _match_plot_point(target: dict | None) -> dict | None:
+            if not target or not plot_points:
+                return None
+            tw = float(target.get("omega", np.nan))
+            tr = float(target.get("re", np.nan))
+            if not (np.isfinite(tw) and np.isfinite(tr)):
+                return None
+            return min(
+                plot_points,
+                key=lambda p: (
+                    abs(float(p["omega"]) - tw),
+                    abs(float(p["re"]) - tr),
+                ),
+            )
+
+        return {
+            "points": plot_points,
+            "research_critical_point": _match_plot_point(semantic_research),
+            "minimum_re_critical_point": _match_plot_point(semantic_min_re),
+            "source_curve": "display_curve_sampled_branch_for_plot",
         }
 
     def calculate_transverse(self, params: dict) -> dict:
@@ -1289,52 +1945,149 @@ class BoreBarModel:
             },
         }
 
-    def find_transverse_im0_points(self, params: dict) -> dict:
-        """
-        Находит все пересечения Im(W(iω))=0 и критическую точку.
 
-        Сначала учитываются точные нули, попавшие прямо в узлы сетки,
-        затем добавляются пересечения между соседними узлами со сменой
-        знака. После этого близкие точки дедуплицируются, а critical
-        выбирается как точка с минимальным Re.
-        """
+    def find_transverse_im0_points(self, params: dict) -> dict:
         res = self.calculate_transverse(params)
+        return self.find_transverse_im0_points_from_result(params, res)
+
+    def _select_transverse_research_critical_point(self, points: list[dict], params: dict) -> tuple[dict | None, dict]:
+        """Выбрать исследовательскую критическую точку поперечной модели.
+
+        Для поперечного исследования критическая точка должна соответствовать
+        нетривиальному пересечению годографа с *отрицательной* действительной
+        осью. Точка W=0 при ω≈0 и любые пересечения на положительной оси не
+        должны объявляться исследовательской критической точкой: это и давало
+        визуально неверный зелёный маркер у начала координат.
+
+        Поэтому политика жёсткая:
+        1) ищем только точки с ω > eps и Re(W) < -eps;
+        2) среди них берём самую левую;
+        3) если таких точек нет, исследовательская критическая точка считается
+           отсутствующей, а не подменяется origin/fallback-точкой.
+        """
+        omega_eps = float(params.get("transverse_research_omega_eps", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
+        negative_re_eps = float(params.get("transverse_research_negative_re_eps", 1e-9))
+        policy = {
+            "kind": "minimum_negative_ReW_on_im_zero_set",
+            "criterion": "strict_negative_real_axis_intersection_only",
+            "model_regime": "fixed_verified_mode",
+            "omega_nontrivial_eps": omega_eps,
+            "negative_re_eps": negative_re_eps,
+        }
+        if not points:
+            return None, {**policy, "selection_status": "no_im0_points"}
+
+        ordered = sorted(points, key=lambda p: (float(p["re"]), float(p["omega"])))
+        research_candidates = [
+            p for p in ordered
+            if np.isfinite(float(p.get("omega", np.nan)))
+            and np.isfinite(float(p.get("re", np.nan)))
+            and float(p["omega"]) > omega_eps
+            and float(p["re"]) < -negative_re_eps
+        ]
+        if not research_candidates:
+            return None, {**policy, "selection_status": "no_negative_real_axis_intersection"}
+
+        chosen = dict(research_candidates[0])
+        chosen["im"] = 0.0
+        return chosen, {**policy, "selection_status": "minimum_negative_re_nontrivial_point_selected"}
+
+    def find_transverse_im0_points_from_result(self, params: dict, res: dict) -> dict:
+        """Найти Im(W)=0 по уже рассчитанной кривой без повторной полной сборки модели.
+
+        Единый контракт special points для проекта:
+        - points
+        - research_critical_point
+        - minimum_re_critical_point
+        - source_curve
+        - critical_selection_policy
+
+        Поле critical временно сохраняется только как alias для совместимости.
+        """
+        params = self.validate_transverse_params(params)
         omega = np.asarray(res["omega"], dtype=float)
         Wre = np.asarray(res["W_real"], dtype=float)
         Wim = np.asarray(res["W_imag"], dtype=float)
 
-        points = []
         eps = float(params.get("im0_eps_transverse", 1e-9))
-
-        finite_zero = np.isfinite(omega) & np.isfinite(Wre) & np.isfinite(Wim) & (np.abs(Wim) <= eps)
-        for idx in np.where(finite_zero)[0]:
-            w = float(omega[idx])
-            points.append({
-                "omega": w,
-                "re": float(Wre[idx]),
-                "im": 0.0,
-                "frequency": float(w / (2.0 * np.pi)),
-            })
-
-        for i, j in BoreBarModel._sign_change_intervals(omega, Wim):
-            w1, w2 = omega[i], omega[j]
-            y1, y2 = Wim[i], Wim[j]
-            w0 = BoreBarModel._linear_root(w1, y1, w2, y2)
-            re0 = np.interp(w0, [w1, w2], [Wre[i], Wre[j]])
-            points.append({
-                "omega": float(w0),
-                "re": float(re0),
-                "im": 0.0,
-                "frequency": float(w0 / (2.0 * np.pi)),
-            })
-
-        dedup = []
         omega_tol = float(params.get("im0_omega_tol_transverse", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
         re_tol = float(params.get("im0_re_tol_transverse", 1e-6))
-        for p in sorted(points, key=lambda item: (item["omega"], item["re"])):
-            if dedup and abs(p["omega"] - dedup[-1]["omega"]) <= omega_tol and abs(p["re"] - dedup[-1]["re"]) <= re_tol:
-                continue
-            dedup.append(p)
 
-        critical = min(dedup, key=lambda p: p["re"]) if dedup else None
-        return {"points": dedup, "critical": critical}
+        modal = {
+            "alpha": float(res["alpha"]),
+            "beta": float(res["beta"]),
+            "gamma": float(res["gamma"]),
+            "h": float(res["h"]),
+            "phi_L": float(res["phi_L"]),
+            "R": float(res["R"]),
+            "r": float(res["r"]),
+            "J": float(res["J"]),
+            "S": float(res["S"]),
+            "k1": float(res["k1"]),
+            "shape_scale_C": float(res["shape_scale_C"]),
+            "modal_shape_variant": res["modal_shape_variant"],
+            "modal_shape_source": res["modal_shape_source"],
+            "modal_shape_description": res["modal_shape_description"],
+            "shape_normalization": res["shape_normalization"],
+            "lambda1": float(res["lambda1"]),
+            "shape_eta": res["shape_eta"],
+            "modal_mass_integral": float(res["modal_mass_integral"]),
+            "modal_curvature_integral": float(res["modal_curvature_integral"]),
+            "damping_source": res["damping_source"],
+            "model_variant": res["model_variant"],
+            "transverse_model_regime": res.get("transverse_model_regime"),
+            "transverse_model_regime_label": res.get("transverse_model_regime_label"),
+            "transverse_model_scope": res.get("transverse_model_scope"),
+            "transverse_model_note": res.get("transverse_model_note"),
+            "research_alignment_status": res.get("research_alignment_status"),
+        }
+
+        mu = float(params["mu"])
+        tau = float(params["tau"])
+        K_cut = float(params.get("K_cut", 6e5))
+        alpha = float(modal["alpha"])
+        beta = float(modal["beta"])
+        gamma = float(modal["gamma"])
+        phi_L = float(modal["phi_L"])
+        denom_eps = float(params.get("transverse_denom_eps", 1e-12))
+
+        def _eval_transverse_scalar(w: float) -> tuple[float, float]:
+            p = 1j * float(w)
+            with np.errstate(all="ignore"):
+                numerator = (phi_L ** 2) * K_cut * (1.0 - mu * np.exp(-p * tau))
+                denom = alpha * p ** 2 + beta * p + gamma
+                if not (np.isfinite(denom.real) and np.isfinite(denom.imag)) or abs(denom) < denom_eps:
+                    return float("nan"), float("nan")
+                value = numerator / denom
+            if not (np.isfinite(value.real) and np.isfinite(value.imag)):
+                return float("nan"), float("nan")
+            return float(value.real), float(value.imag)
+
+        def im_func(w):
+            return _eval_transverse_scalar(w)[1]
+
+        def re_func(w):
+            return _eval_transverse_scalar(w)[0]
+
+        dedup = self._build_zero_crossing_points(
+            omega, Wre, Wim,
+            zero_eps=eps,
+            omega_tol=omega_tol,
+            re_tol=re_tol,
+            refine_func=im_func,
+            re_eval_func=re_func,
+            re_key="re",
+        )
+        research_critical_point, policy_meta = self._select_transverse_research_critical_point(dedup, params)
+        minimum_re_critical_point = min(dedup, key=lambda p: (float(p["re"]), float(p["omega"]))) if dedup else None
+        if minimum_re_critical_point is not None:
+            minimum_re_critical_point = dict(minimum_re_critical_point)
+            minimum_re_critical_point["im"] = 0.0
+        return {
+            "points": dedup,
+            "research_critical_point": research_critical_point,
+            "minimum_re_critical_point": minimum_re_critical_point,
+            "critical": research_critical_point,
+            "source_curve": "direct_transverse_curve",
+            "critical_selection_policy": policy_meta,
+        }

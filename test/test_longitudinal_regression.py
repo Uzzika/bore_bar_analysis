@@ -70,11 +70,11 @@ def test_longitudinal_im0_points_have_consistent_critical_point(model):
     )
     im0 = model.find_longitudinal_im0_points(params)
     points = im0['points']
-    critical = im0['critical']
+    research_critical = im0['research_critical_point']
 
     assert len(points) > 0
-    assert critical is not None
-    assert critical['K1'] == min(p['K1'] for p in points)
+    assert research_critical is not None
+    assert research_critical['K1'] == min(p['K1'] for p in points)
     for point in points:
         assert point['delta'] == 0.0
         assert np.isfinite(point['omega'])

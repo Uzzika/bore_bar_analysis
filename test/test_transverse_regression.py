@@ -30,7 +30,7 @@ def test_transverse_returns_finite_curve_and_modal_metadata(model):
     assert res['shape_normalization'] == 'phi(L)=1'
 
 
-def test_transverse_legacy_beta_is_converted_back_to_h(model):
+def test_transverse_default_h_is_used_when_h_not_provided(model):
     params = dict(
         E=2.1e11,
         rho=7800.0,
@@ -40,7 +40,6 @@ def test_transverse_legacy_beta_is_converted_back_to_h(model):
         R=0.04,
         r=0.035,
         K_cut=6e5,
-        beta=0.3,
         omega_start=0.0,
         omega_end=220.0,
         omega_step=0.1,
@@ -62,16 +61,35 @@ def test_transverse_im0_points_have_consistent_critical_point(model):
         R=0.04,
         r=0.035,
         K_cut=6e5,
-        beta=0.3,
         omega_start=0.1,
         omega_end=220.0,
         omega_step=0.1,
     )
     im0 = model.find_transverse_im0_points(params)
     points = im0['points']
-    critical = im0['critical']
+    research_critical = im0['research_critical_point']
 
     assert len(points) > 0
-    assert critical is not None
-    assert critical['re'] == min(p['re'] for p in points)
+    assert research_critical is not None
+    assert research_critical['re'] == min(p['re'] for p in points)
     assert all(p['im'] == 0.0 for p in points)
+
+
+def test_transverse_rejects_removed_legacy_variant(model):
+    params = dict(
+        E=2.1e11,
+        rho=7800.0,
+        length=2.7,
+        mu=0.6,
+        tau=0.1,
+        R=0.04,
+        r=0.035,
+        K_cut=6e5,
+        h=3.02141544835e-05,
+        omega_start=0.0,
+        omega_end=220.0,
+        omega_step=0.1,
+        transverse_modal_shape_variant="project_maple_compatible_phi",
+    )
+    with pytest.raises(ValueError, match="только verified_cantilever_first_mode_phi"):
+        model.calculate_transverse(params)
