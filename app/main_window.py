@@ -77,7 +77,7 @@ QScrollArea#leftPanelScroll {
 
 class MainWindow(QMainWindow):
     MIN_WIDTH = 1080
-    MIN_HEIGHT = 400
+    MIN_HEIGHT = 280
     CHROME_W = 56
     CHROME_H = 94
 

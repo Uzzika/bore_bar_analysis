@@ -29,9 +29,6 @@ def build_longitudinal_summary(result: dict) -> str:
     invalid_counts = dict(result.get("invalid_reason_counts", {}))
     return "\n".join([
         "Продольная модель:",
-        f"Режим: {result.get('longitudinal_model_regime_label', 'SI-интерпретация исследовательской постановки')}",
-        f"Статус относительно исследования: {result.get('research_alignment_status', 'si_interpretation_of_research_formulas')}",
-        f"Назначение режима: {result.get('longitudinal_model_note', 'Физически согласованная SI-реализация формул K₁–δ.')}",
         f"a = √(E/ρ) = {result['a']:.6g} м/с",
         f"K₁(0+) = {result['K1_0']:.6g}",
         f"δ(0+) = {result['delta_0']:.6g}",

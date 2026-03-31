@@ -1,3 +1,4 @@
+
 from time import perf_counter
 
 from PyQt5.QtWidgets import (
@@ -7,12 +8,15 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QApplication,
 )
-import numpy as np
 
 from app.ui.analysis_page_base import AnalysisPageBase
 from app.core.borebar_model import BoreBarModel
 from app.utils.presets import get_torsional_presets
-from app.utils.export_utils import curve_rows_with_gaps, curve_summary, export_analysis_data
+from app.utils.export_utils import export_analysis_data
+from app.utils.analysis_presenters import (
+    build_torsional_export_data,
+    build_torsional_summary_text,
+)
 
 
 class TorsionalPage(AnalysisPageBase):
@@ -34,7 +38,7 @@ class TorsionalPage(AnalysisPageBase):
         self.Jp_input = QLineEdit("1.9e-5")
         self.omega_start_input = QLineEdit("1000")
         self.omega_end_input = QLineEdit("15000")
-        self.omega_step_input = QLineEdit("1")
+        self.omega_step_input = QLineEdit("0.1")
 
         result_card, self.results_label = self._make_result_card(
             "После расчёта здесь появится краткая сводка по критическим точкам и параметрам модели."
@@ -46,8 +50,8 @@ class TorsionalPage(AnalysisPageBase):
         back_btn = QPushButton("Назад в меню")
         back_btn.clicked.connect(lambda: main_window.switch(main_window.menu))
 
-        export_btn = QPushButton("Экспорт результатов")
-        export_btn.clicked.connect(self.export_results)
+        self.export_button = QPushButton("Экспорт результатов")
+        self.export_button.clicked.connect(self.export_results)
 
         for label_text, widget in [
             ("Плотность материала (ρ, кг/м³)", self.rho_input),
@@ -65,12 +69,11 @@ class TorsionalPage(AnalysisPageBase):
 
         left.addWidget(analyze_btn)
         left.addWidget(back_btn)
-        left.addWidget(export_btn)
+        left.addWidget(self.export_button)
 
         self._setup_preset_selector(left, get_torsional_presets(), self.apply_preset)
         self._add_frequency_controls(left, self.omega_start_input, self.omega_end_input, self.omega_step_input)
         left.addStretch()
-
         self._build_analysis_layout(left_card, result_card)
 
     def get_parameters(self):
@@ -89,7 +92,6 @@ class TorsionalPage(AnalysisPageBase):
 
     def _validate_parameters(self, params: dict):
         self.model.validate_torsional_params(params)
-
 
     @staticmethod
     def _params_signature(params: dict):
@@ -110,19 +112,6 @@ class TorsionalPage(AnalysisPageBase):
         self._cached_analysis = {"result": result, "im0": im0}
         return result, im0
 
-
-    @staticmethod
-    def _format_nonzero_reason_counts(reason_counts: dict) -> str:
-        items = []
-        for key, value in (reason_counts or {}).items():
-            try:
-                ivalue = int(value)
-            except Exception:
-                continue
-            if ivalue > 0:
-                items.append(f"{key}={ivalue}")
-        return ", ".join(items) if items else "нет"
-
     def _update_result_summary(
         self,
         result: dict,
@@ -133,59 +122,15 @@ class TorsionalPage(AnalysisPageBase):
         plot_curve: dict | None = None,
         elapsed_seconds: float | None = None,
     ):
-        lines = [
-            "Крутильная модель",
-            "",
-            "Ключевые параметры:",
-            f"δ₁,эфф = {float(result.get('delta1_effective', float('nan'))):.6g}",
-        ]
-        if im0 is not None:
-            points = im0.get('points', []) or []
-            min_re_point = im0.get('minimum_re_critical_point')
-            policy = im0.get('critical_selection_policy', {}) or {}
-            lines += [
-                "",
-                "Исследовательские special points:",
-                f"Найдено точек Im(σ)=0: {len(points)}",
-                f"Политика выбора критической точки: {policy.get('kind', 'first_im0_in_research_window')}",
-            ]
-            if 'omega_low' in policy and 'omega_high' in policy:
-                lines.append(f"Окно поиска: [{float(policy['omega_low']):.6g}, {float(policy['omega_high']):.6g}] рад/с")
-            if critical is not None:
-                lines += [
-                    "Исследовательская критическая точка:",
-                    f"ω* = {float(critical.get('omega', float('nan'))):.6g} рад/с",
-                    f"f* = {float(critical.get('frequency', float('nan'))):.6g} Гц",
-                    f"Re(σ*) = {float(critical.get('re', float('nan'))):.6g}",
-                ]
-            else:
-                lines.append("Исследовательская критическая точка: не найдена")
-            if min_re_point is not None and critical is not None:
-                mr = float(min_re_point.get('re', float('nan')))
-                cr = float(critical.get('re', float('nan')))
-                mo = float(min_re_point.get('omega', float('nan')))
-                co = float(critical.get('omega', float('nan')))
-                if not (np.isclose(mr, cr, equal_nan=True) and np.isclose(mo, co, equal_nan=True)):
-                    lines += [
-                        "",
-                        "Диагностическая самая левая точка:",
-                        f"ω = {mo:.6g} рад/с",
-                        f"Re(σ) = {mr:.6g}",
-                    ]
-
-        invalid_count = int(result.get('invalid_point_count', 0))
-        lines += [
-            "",
-            "Паспорт расчёта:",
-            f"Отбраковано точек: {invalid_count}",
-            f"Причины: {self._format_nonzero_reason_counts(result.get('invalid_reason_counts', {}))}",
-        ]
-        if plot_curve is not None:
-            lines.append(f"Обрезано display-сегментов у начала координат: {int(plot_curve.get('clipped_count', 0))}")
-        if elapsed_seconds is not None:
-            lines.append(f"Время расчёта и построения графика: {elapsed_seconds:.3f} с")
-        self._set_results_text("\n".join(lines))
-
+        self._set_results_text(
+            build_torsional_summary_text(
+                result=result,
+                critical=critical,
+                im0=im0,
+                plot_curve=plot_curve,
+                elapsed_seconds=elapsed_seconds,
+            )
+        )
 
     def run_analysis(self):
         try:
@@ -253,47 +198,12 @@ class TorsionalPage(AnalysisPageBase):
 
     def _build_export_data(self, params: dict) -> dict:
         result, im0 = self._get_or_compute_analysis(params)
-        research_critical = im0.get("research_critical_point")
-
-        curve_omega = np.asarray(result["physical_omega"], dtype=float)
-        curve_re = np.asarray(result["physical_sigma_real"], dtype=float)
-        curve_im = np.asarray(result["physical_sigma_imag"], dtype=float)
-
-        return {
-            "export_schema_version": 4,
-            "analysis_type": "torsional",
-            "preset_name": self.current_preset_name or "custom",
-            "params": params,
-            "model_info": {
-                "model_variant": result.get("model_variant", "torsional_physical_positive_plus_model_display_symmetry"),
-                "curve_semantics": "curve stores the physical torsional branch: omega, Re(sigma), Im(sigma)",
-                "delta1_effective": float(result.get("delta1_effective", params["delta1"] * params.get("multiplier", 1.0))),
-                "negative_frequency_policy": result.get(
-                    "negative_frequency_policy",
-                    "display curve is a conjugate mirror of the positive physical branch",
-                ),
-                "source_curve_for_special_points": im0.get("source_curve", "physical_positive_branch"),
-                "critical_point_semantics": "research_critical_point_first_im0_in_research_window",
-                "minimum_re_point_semantics": "diagnostic_only_not_used_as_primary_critical_point",
-            },
-            "numerics": {
-                "solver_variant": "torsional_direct_curve_sampling_with_im0_detection",
-                "export_variant": "compact_unified_v4",
-                "omega_step": float(params["omega_step"]),
-                "invalid_point_count": int(result.get("invalid_point_count", 0)),
-                "invalid_reason_counts": dict(result.get("invalid_reason_counts", {})),
-                "numerics_metadata": dict(result.get("numerics_metadata", {})),
-                "curve_saved_kind": "physical_only",
-            },
-            "curve_summary": curve_summary(curve_omega, curve_re, curve_im, include_total_count=True),
-            "special_points": {
-                "im0_points": im0.get("points", []),
-                "critical_point": research_critical,
-                "research_critical_point": research_critical,
-                "minimum_re_critical_point": im0.get("minimum_re_critical_point"),
-            },
-            "curve": curve_rows_with_gaps(curve_omega, curve_re, curve_im),
-        }
+        return build_torsional_export_data(
+            params=params,
+            preset_name=self.current_preset_name,
+            result=result,
+            im0=im0,
+        )
 
     def export_results(self):
         try:
@@ -307,7 +217,6 @@ class TorsionalPage(AnalysisPageBase):
             return
 
         data = self._build_export_data(params)
-
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Сохранить крутильные результаты",

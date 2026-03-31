@@ -19,7 +19,7 @@ def get_torsional_presets() -> dict:
             "Jp": 1.9e-5,
             "omega_start": -12000.0,
             "omega_end": 12000.0,
-            "omega_step": 2.0,
+            "omega_step": 0.1,
         },
         # Имя сохранено под тесты; делаем диапазон локальным и более «резким» рядом с рабочей областью.
         "Крутильные — локальный диапазон около ω*": {
@@ -69,7 +69,7 @@ def get_torsional_presets() -> dict:
             "Jp": 1.9e-5,
             "omega_start": 1000.0,
             "omega_end": 15000.0,
-            "omega_step": 1.0,
+            "omega_step": 0.1,
         },
     }
 
@@ -138,7 +138,7 @@ def get_longitudinal_presets() -> dict:
 
 def get_transverse_presets() -> dict:
     return {
-        "Поперечные — verified baseline": {
+        "Поперечные — отрицательные частоты": {
             "E": 2.1e11,
             "rho": 7800.0,
             "length": 2.7,
@@ -148,7 +148,7 @@ def get_transverse_presets() -> dict:
             "r": 0.035,
             "K_cut": 6.0e5,
             "h": 3.0214154483500606e-05,
-            "omega_start": 0.0,
+            "omega_start": -220.0,
             "omega_end": 220.0,
             "omega_step": 0.1,
             "transverse_modal_shape_variant": "verified_cantilever_first_mode_phi",

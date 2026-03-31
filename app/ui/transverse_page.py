@@ -1,3 +1,4 @@
+
 from time import perf_counter
 
 from PyQt5.QtWidgets import (
@@ -8,12 +9,15 @@ from PyQt5.QtWidgets import (
     QApplication,
     QSizePolicy,
 )
-import numpy as np
 
 from app.ui.analysis_page_base import AnalysisPageBase
 from app.core.borebar_model import BoreBarModel
 from app.utils.presets import get_transverse_presets
-from app.utils.export_utils import curve_rows_with_gaps, curve_summary, export_analysis_data
+from app.utils.export_utils import export_analysis_data
+from app.utils.analysis_presenters import (
+    build_transverse_export_data,
+    build_transverse_summary_text,
+)
 
 
 class TransversePage(AnalysisPageBase):
@@ -41,18 +45,9 @@ class TransversePage(AnalysisPageBase):
         self.omega_step_input = QLineEdit("0.1")
 
         for widget in (
-            self.E_input,
-            self.rho_input,
-            self.length_input,
-            self.mu_input,
-            self.tau_input,
-            self.R_input,
-            self.r_input,
-            self.K_input,
-            self.h_input,
-            self.omega_start_input,
-            self.omega_end_input,
-            self.omega_step_input,
+            self.E_input, self.rho_input, self.length_input, self.mu_input, self.tau_input,
+            self.R_input, self.r_input, self.K_input, self.h_input,
+            self.omega_start_input, self.omega_end_input, self.omega_step_input,
         ):
             widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             widget.setMinimumWidth(0)
@@ -100,7 +95,6 @@ class TransversePage(AnalysisPageBase):
             self.preset_combo.setMinimumWidth(0)
         self._add_frequency_controls(left, self.omega_start_input, self.omega_end_input, self.omega_step_input)
         left.addStretch()
-
         self._build_analysis_layout(left_card, result_card)
 
     @staticmethod
@@ -139,81 +133,15 @@ class TransversePage(AnalysisPageBase):
     def _validate_parameters(self, params: dict):
         self.model.validate_transverse_params(params)
 
-
-    @staticmethod
-    def _format_nonzero_reason_counts(reason_counts: dict) -> str:
-        items = []
-        for key, value in (reason_counts or {}).items():
-            try:
-                ivalue = int(value)
-            except Exception:
-                continue
-            if ivalue > 0:
-                items.append(f"{key}={ivalue}")
-        return ", ".join(items) if items else "нет"
-
-    def _update_result_summary(
-        self,
-        result: dict,
-        im0: dict | None = None,
-        display_curve: dict | None = None,
-        elapsed_seconds: float | None = None,
-    ):
-        if display_curve is None:
-            omega = np.asarray(result.get('omega', []), dtype=float)
-            display_curve = {
-                'display_point_count': int(omega.size),
-                'base_point_count': int(omega.size),
-            }
-
-        lines = [
-            "Поперечная модель",
-            "",
-            "Ключевые параметры:",
-            f"α = {float(result.get('alpha', float('nan'))):.6g}",
-            f"β = {float(result.get('beta', float('nan'))):.6g}",
-            f"γ = {float(result.get('gamma', float('nan'))):.6g}",
-            f"h = {float(result.get('h', float('nan'))):.6g} с",
-            f"β = h·γ = {float(result.get('h', float('nan'))) * float(result.get('gamma', float('nan'))):.6g}",
-            f"Форма φ(x): {result.get('modal_shape_source', 'verified_cantilever_first_mode_phi')}, нормировка {result.get('shape_normalization', 'phi(L)=1')}",
-        ]
-
-        if im0 is not None:
-            points = im0.get('points', []) or []
-            research_critical = im0.get('research_critical_point') or im0.get('critical')
-            policy = im0.get('critical_selection_policy', {}) or {}
-            lines += [
-                "",
-                "Исследовательские special points:",
-                f"Найдено точек Im(W)=0: {len(points)}",
-                f"Политика выбора критической точки: {policy.get('kind', 'minimum_ReW_on_im_zero_set')}",
-            ]
-            if research_critical is not None:
-                lines += [
-                    "Исследовательская критическая точка:",
-                    f"ω* = {float(research_critical.get('omega', float('nan'))):.6g} рад/с",
-                    f"f* = {float(research_critical.get('frequency', float('nan'))):.6g} Гц",
-                    f"Re(W*) = {float(research_critical.get('re', float('nan'))):.6g}",
-                ]
-            else:
-                lines.append("Исследовательская критическая точка: не найдена")
-
-        invalid_count = int(result.get('invalid_point_count', 0))
-        lines += [
-            "",
-            "Паспорт расчёта:",
-            f"Отбраковано точек: {invalid_count}",
-            f"Причины: {self._format_nonzero_reason_counts(result.get('invalid_reason_counts', {}))}",
-        ]
-        if display_curve is not None:
-            base_n = int(display_curve.get('base_point_count', 0))
-            disp_n = int(display_curve.get('display_point_count', 0))
-            if base_n > 0:
-                lines.append(f"Точек на физической сетке / display-сетке: {base_n} / {disp_n}")
-        if elapsed_seconds is not None:
-            lines.append(f"Время расчёта и построения графика: {elapsed_seconds:.3f} с")
-        self._set_results_text("\n".join(lines))
-
+    def _update_result_summary(self, result: dict, im0: dict | None = None, display_curve: dict | None = None, elapsed_seconds: float | None = None):
+        self._set_results_text(
+            build_transverse_summary_text(
+                result=result,
+                im0=im0,
+                display_curve=display_curve,
+                elapsed_seconds=elapsed_seconds,
+            )
+        )
 
     def run_analysis(self):
         try:
@@ -283,7 +211,6 @@ class TransversePage(AnalysisPageBase):
         if name not in self.presets:
             return
         self.current_preset_name = name
-
         preset = self.presets[name]
         mapping = {
             "E": self.E_input,
@@ -299,71 +226,18 @@ class TransversePage(AnalysisPageBase):
             "omega_end": self.omega_end_input,
             "omega_step": self.omega_step_input,
         }
-
         for key, widget in mapping.items():
             if key in preset:
                 widget.setText(str(preset[key]))
 
-
     def _build_export_data(self, params: dict) -> dict:
         result, im0 = self._get_or_compute_analysis(params)
-        curve_omega = np.asarray(result["omega"], dtype=float)
-        curve_re = np.asarray(result["W_real"], dtype=float)
-        curve_im = np.asarray(result["W_imag"], dtype=float)
-
-        research_critical = im0.get("research_critical_point") or im0.get("critical")
-
-        return {
-            "export_schema_version": 4,
-            "analysis_type": "transverse",
-            "preset_name": self.current_preset_name or "custom",
-            "params": params,
-            "model_info": {
-                "model_variant": result.get("model_variant", "galerkin_one_mode_unknown"),
-                "curve_semantics": "curve stores omega, Re(W), Im(W) on the full physical grid; invalid points are kept as null/NaN gaps",
-                "transverse_model": "Galerkin one-mode model",
-                "transverse_model_regime": result.get("transverse_model_regime"),
-                "transverse_model_regime_label": result.get("transverse_model_regime_label"),
-                "transverse_model_scope": result.get("transverse_model_scope"),
-                "transverse_model_note": result.get("transverse_model_note"),
-                "research_alignment_status": result.get("research_alignment_status"),
-                "interpretation_note": (
-                    "Единственный пользовательский режим: исследовательская одномодовая модель с верифицированной первой собственной формой консольной балки"
-                ),
-                "modal_shape_variant": result.get("modal_shape_variant"),
-                "modal_shape_source": result.get("modal_shape_source"),
-                "modal_shape_description": result.get("modal_shape_description"),
-                "shape_normalization": result.get("shape_normalization"),
-                "shape_scale_C": float(result["shape_scale_C"]),
-                "k1": float(result["k1"]),
-                "lambda1": float(result["lambda1"]),
-                "shape_eta": result.get("shape_eta"),
-                "alpha": float(result["alpha"]),
-                "beta": float(result["beta"]),
-                "gamma": float(result["gamma"]),
-                "h": float(result["h"]),
-                "damping_source": result["damping_source"],
-                "modal_mass_integral": float(result["modal_mass_integral"]),
-                "modal_curvature_integral": float(result["modal_curvature_integral"]),
-            },
-            "numerics": {
-                "solver_variant": "transverse_direct_curve_sampling_with_zero_crossing_detection",
-                "export_variant": "compact_unified_v4",
-                "omega_step": float(params["omega_step"]),
-                "invalid_point_count": int(result.get("invalid_point_count", 0)),
-                "invalid_reason_counts": dict(result.get("invalid_reason_counts", {})),
-                "numerics_metadata": dict(result.get("numerics_metadata", {})),
-                "curve_saved_kind": "full_curve_with_nan_gaps",
-            },
-            "curve_summary": curve_summary(curve_omega, curve_re, curve_im, include_total_count=True),
-            "special_points": {
-                "im0_points": im0.get("points", []),
-                "research_critical_point": research_critical,
-                "minimum_re_critical_point": im0.get("minimum_re_critical_point"),
-                "critical_selection_policy": im0.get("critical_selection_policy"),
-            },
-            "curve": curve_rows_with_gaps(curve_omega, curve_re, curve_im),
-        }
+        return build_transverse_export_data(
+            params=params,
+            preset_name=self.current_preset_name,
+            result=result,
+            im0=im0,
+        )
 
     def export_results(self):
         try:
@@ -377,12 +251,11 @@ class TransversePage(AnalysisPageBase):
             return
 
         data = self._build_export_data(params)
-
         filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Сохранить поперечные результаты",
             self._default_export_path("transverse_results.json"),
-            "JSON (*.json);;CSV (*.csv)"
+            "JSON (*.json);;CSV (*.csv)",
         )
         if not filename:
             return

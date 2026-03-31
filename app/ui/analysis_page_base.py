@@ -18,9 +18,9 @@ from matplotlib.figure import Figure
 
 
 class AnalysisPageBase(QWidget):
-    """Общая база для страниц анализа колебаний."""
+    """Базовая страница анализа: layout, график, результаты и export-path."""
 
-    LEFT_PANEL_WIDTH = 452
+    LEFT_PANEL_WIDTH = 500
     CANVAS_MIN_WIDTH = 680
     CANVAS_MIN_HEIGHT = 460
     RESULT_MIN_HEIGHT = 170

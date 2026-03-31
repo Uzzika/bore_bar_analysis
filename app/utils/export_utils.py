@@ -6,6 +6,7 @@ import numpy as np
 
 
 def curve_rows_with_gaps(omega: np.ndarray, re: np.ndarray, im: np.ndarray) -> list[dict]:
+    """Подготовить строки кривой, сохраняя NaN-разрывы как null."""
     rows = []
     for o, r, i in zip(np.asarray(omega), np.asarray(re), np.asarray(im)):
         rows.append({
@@ -18,6 +19,7 @@ def curve_rows_with_gaps(omega: np.ndarray, re: np.ndarray, im: np.ndarray) -> l
 
 
 def finite_curve_rows(omega: np.ndarray, re: np.ndarray, im: np.ndarray) -> list[dict]:
+    """Подготовить только конечные точки кривой без разрывов."""
     omega = np.asarray(omega, dtype=float)
     re = np.asarray(re, dtype=float)
     im = np.asarray(im, dtype=float)
@@ -30,6 +32,7 @@ def finite_curve_rows(omega: np.ndarray, re: np.ndarray, im: np.ndarray) -> list
 
 
 def curve_summary(omega: np.ndarray, re: np.ndarray, im: np.ndarray, *, include_total_count: bool) -> dict:
+    """Посчитать компактную сводку по диапазонам и числу точек кривой."""
     omega = np.asarray(omega, dtype=float)
     re = np.asarray(re, dtype=float)
     im = np.asarray(im, dtype=float)
@@ -67,6 +70,7 @@ def curve_summary(omega: np.ndarray, re: np.ndarray, im: np.ndarray, *, include_
 
 
 def export_analysis_data(data: dict, filename: str, file_format: str) -> None:
+    """Сохранить экспорт в JSON или CSV в единой структуре проекта."""
     if file_format == "json":
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -110,7 +114,11 @@ def export_analysis_data(data: dict, filename: str, file_format: str) -> None:
         for p in data.get("special_points", {}).get("im0_points", []):
             writer.writerow([p.get("omega"), p.get("re"), p.get("im"), p.get("frequency")])
 
-        critical = data.get("special_points", {}).get("critical_point")
+        special_points = data.get("special_points", {})
+        critical = (
+            special_points.get("critical_point")
+            or special_points.get("research_critical_point")
+        )
         if critical:
             writer.writerow([])
             writer.writerow(["# critical_point"])
