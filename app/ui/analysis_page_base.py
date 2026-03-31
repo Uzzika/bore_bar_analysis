@@ -13,14 +13,17 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QSplitter,
 )
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import (
+    FigureCanvasQTAgg as FigureCanvas,
+    NavigationToolbar2QT as NavigationToolbar,
+)
 from matplotlib.figure import Figure
 
 
 class AnalysisPageBase(QWidget):
-    """Базовая страница анализа: layout, график, результаты и export-path."""
+    """Общая база для страниц анализа колебаний."""
 
-    LEFT_PANEL_WIDTH = 500
+    LEFT_PANEL_WIDTH = 452
     CANVAS_MIN_WIDTH = 680
     CANVAS_MIN_HEIGHT = 460
     RESULT_MIN_HEIGHT = 170
@@ -33,6 +36,9 @@ class AnalysisPageBase(QWidget):
         self.canvas.setObjectName("plotCanvas")
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.canvas.setMinimumSize(self.CANVAS_MIN_WIDTH, self.CANVAS_MIN_HEIGHT)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        self.toolbar.setIconSize(QSize(16, 16))
+        self.toolbar.setMovable(False)
         self.preset_combo = None
         self.presets = {}
         self.results_label = None
@@ -159,8 +165,9 @@ class AnalysisPageBase(QWidget):
         left_scroll = self._make_left_controls_scroll(left_card)
 
         plot_card, plot_layout = self._make_card("График")
+        plot_layout.addWidget(self.toolbar)
         plot_layout.addWidget(self.canvas, 1)
-        plot_card.setMinimumSize(self.CANVAS_MIN_WIDTH + 36, self.CANVAS_MIN_HEIGHT + 72)
+        plot_card.setMinimumSize(self.CANVAS_MIN_WIDTH + 36, self.CANVAS_MIN_HEIGHT + 108)
 
         right_splitter = QSplitter(Qt.Vertical)
         right_splitter.setChildrenCollapsible(False)

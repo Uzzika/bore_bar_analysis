@@ -1,11 +1,26 @@
-"""Математические модели крутильных, продольных и поперечных колебаний борштанги."""
+"""
+borebar_model.py
+
+Модуль с математическими моделями колебаний борштанги:
+- крутильные колебания (torsional);
+- продольные колебания (longitudinal);
+- поперечные колебания (transverse, модальная аппроксимация).
+
+"""
 
 import numpy as np
 from scipy.optimize import root_scalar
 
 
 class BoreBarModel:
-    """Модельный слой проекта: расчёт кривых, special points и служебной диагностики."""
+    """
+    Класс, инкапсулирующий математические модели для анализа устойчивости борштанги.
+
+    Основные методы:
+        - calculate_torsional(params):      крутильные колебания, кривая D-разбиения σ(p);
+        - calculate_longitudinal(params):   продольные колебания, кривая K1–δ;
+        - calculate_transverse(params):     поперечные колебания, годограф W(p).
+    """
 
     # -------------------------------------------------------------------------
     # Вспомогательные функции
@@ -13,7 +28,11 @@ class BoreBarModel:
 
     @staticmethod
     def build_frequency_grid(params: dict, include_endpoint: bool = False) -> np.ndarray:
-        """Построить единую частотную сетку для анализа, special points и экспорта."""
+        """Построить единую сетку частот по параметрам проекта.
+
+        Используется анализом, экспортом и поиском специальных точек, чтобы
+        все эти шаги опирались на один и тот же диапазон ω.
+        """
         omega_start = float(params.get("omega_start", 0.001))
         omega_end = float(params.get("omega_end", omega_start))
         omega_step = float(params.get("omega_step", 0.1))
@@ -44,7 +63,18 @@ class BoreBarModel:
 
     @staticmethod
     def _coth(z: np.ndarray, small_eps: float = 1e-8, sinh_eps: float = 1e-10) -> np.ndarray:
-        """Устойчивая coth(z): около нуля — ряд, возле полюсов — NaN."""
+        """
+        Численно устойчивая coth(z).
+
+        Идея:
+        1) Для |z| -> 0 используем разложение:
+              coth(z) ≈ 1/z + z/3 - z^3/45
+        2) Для остальных точек считаем через cosh(z)/sinh(z),
+           но помечаем как NaN точки, где sinh(z) слишком мал,
+           т.к. это окрестности полюсов.
+
+        Возвращает массив complex той же формы.
+        """
         z = np.asarray(z, dtype=complex)
         out = np.full(z.shape, np.nan + 1j * np.nan, dtype=complex)
 
@@ -79,7 +109,11 @@ class BoreBarModel:
 
     @staticmethod
     def _sign_change_intervals(x: np.ndarray, y: np.ndarray) -> list[tuple[int, int]]:
-        """Вернуть пары соседних индексов, между которыми есть смена знака."""
+        """
+        Возвращает пары индексов (i, i+1) В ИСХОДНЫХ массивах,
+        где y меняет знак (пересечение нуля).
+        NaN/Inf пропускаем корректно, без потери соответствия индексов.
+        """
         x = np.asarray(x, dtype=float)
         y = np.asarray(y, dtype=float)
 
@@ -106,14 +140,20 @@ class BoreBarModel:
 
     @staticmethod
     def _linear_root(x1: float, y1: float, x2: float, y2: float) -> float:
-        """Линейно оценить корень y(x)=0 на отрезке [x1, x2]."""
+        """
+        Линейная интерполяция корня y(x)=0 на отрезке [x1,x2].
+        """
         if y2 == y1:
             return 0.5 * (x1 + x2)
         return x1 - y1 * (x2 - x1) / (y2 - y1)
 
     @staticmethod
     def _refine_root_on_interval(func, x1: float, y1: float, x2: float, y2: float, *, xtol: float = 1e-10) -> float:
-        """Уточнить корень методом Брента; при сбое вернуть линейную оценку."""
+        """Уточнить корень на отрезке [x1, x2] методом Брента, если это возможно.
+
+        Если функция ведёт себя плохо или на концах нет строгой смены знака,
+        безопасно возвращается линейная оценка.
+        """
         x1 = float(x1)
         x2 = float(x2)
         y1 = float(y1)
@@ -188,6 +228,86 @@ class BoreBarModel:
             })
 
         return BoreBarModel._deduplicate_special_points(points, omega_tol=omega_tol, re_tol=re_tol)
+
+
+    @staticmethod
+    def _should_refine_torsional_im0_points(params: dict) -> bool:
+        """Нужно ли уточнять все нули Im(σ) дорогим root refinement."""
+        step = float(params.get("omega_step", 1.0))
+        refine_all = bool(params.get("torsional_refine_all_im0_points", False))
+
+        if refine_all:
+            return True
+
+        # На плотной сетке линейной интерполяции обычно достаточно,
+        # а массовое уточнение через Brent становится главным тормозом.
+        return step > 0.1
+
+    @staticmethod
+    def _should_refine_torsional_critical_point(params: dict) -> bool:
+        """Нужно ли дополнительно уточнять только выбранную критическую точку."""
+        step = float(params.get("omega_step", 1.0))
+        refine_critical = bool(params.get("torsional_refine_critical_point", True))
+
+        if not refine_critical:
+            return False
+
+        # При очень мелком шаге уточнение почти ничего не даёт,
+        # но тратит время на дополнительные вычисления.
+        return step > 0.1
+
+    @staticmethod
+    def _refine_single_torsional_point(point: dict | None, params: dict) -> dict | None:
+        """Уточнить одну крутильную special point по уже найденной грубой оценке."""
+        if point is None:
+            return None
+
+        omega0 = float(point.get("omega", np.nan))
+        if not np.isfinite(omega0) or omega0 <= 0.0:
+            return point
+
+        step = float(params.get("omega_step", 1.0))
+        half_window = max(step, abs(omega0) * 1e-6)
+
+        left = max(1e-12, omega0 - half_window)
+        right = omega0 + half_window
+        if right <= left:
+            return point
+
+        def im_func(w):
+            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(
+                params,
+                np.asarray([w], dtype=float),
+            )
+            return float(im_v[0])
+
+        def re_func(w):
+            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(
+                params,
+                np.asarray([w], dtype=float),
+            )
+            return float(re_v[0])
+
+        y_left = im_func(left)
+        y_right = im_func(right)
+
+        if not (np.isfinite(y_left) and np.isfinite(y_right)):
+            return point
+
+        w_refined = BoreBarModel._refine_root_on_interval(im_func, left, y_left, right, y_right)
+        if not np.isfinite(w_refined):
+            return point
+
+        re_refined = re_func(w_refined)
+        if not np.isfinite(re_refined):
+            return point
+
+        return {
+            "omega": float(w_refined),
+            "re": float(re_refined),
+            "im": 0.0,
+            "frequency": float(w_refined / (2.0 * np.pi)),
+        }
 
     @staticmethod
     def _require_finite_scalar(value, name: str) -> float:
@@ -330,7 +450,7 @@ class BoreBarModel:
 
     @staticmethod
     def _count_true_map(mask_map: dict[str, np.ndarray]) -> dict[str, int]:
-        """Преобразовать набор булевых масок в счётчики True."""
+        """Свернуть словарь булевых масок в словарь количества True."""
         counts = {}
         for key, mask in mask_map.items():
             counts[key] = int(np.count_nonzero(np.asarray(mask, dtype=bool)))
@@ -338,7 +458,7 @@ class BoreBarModel:
 
     @staticmethod
     def _refine_frequency_grid(omega: np.ndarray, factor: int = 1, max_points: int = 25000) -> np.ndarray:
-        """Уплотнить сетку только для display-построения."""
+        """Уплотнить сетку частот для отображения, не меняя экспортную физическую сетку."""
         omega = np.asarray(omega, dtype=float)
         if omega.size < 2:
             return omega.copy()
@@ -368,7 +488,14 @@ class BoreBarModel:
         sinh_eps: float = 1e-10,
         sigma_clip: float | None = None,
     ) -> dict:
-        """Собрать маски и счётчики невалидных точек крутильной ветви."""
+        """
+        Построить диагностику невалидных точек крутильной ветви.
+
+        Возвращает словарь с:
+        - invalid_mask: общая маска невалидных точек;
+        - invalid_reason_masks: маски по причинам;
+        - invalid_reason_counts: количества по причинам.
+        """
         arg = np.asarray(arg, dtype=complex)
         shape = arg.shape
 
@@ -424,7 +551,15 @@ class BoreBarModel:
 
     @staticmethod
     def _torsional_positive_omega(params: dict) -> np.ndarray:
-        """Построить физическую крутильную сетку только для ω > 0."""
+        """
+        Каноническая физическая сетка для крутильной модели:
+        считаем только на ω > 0.
+
+        Важно: именно эта сетка должна использоваться для:
+        - расчёта физической кривой;
+        - поиска Im(σ)=0;
+        - выбора критической точки.
+        """
         omega_start = float(params.get("omega_start", 0.001))
         omega_end = float(params.get("omega_end", omega_start))
         omega_step = float(params.get("omega_step", 0.1))
@@ -445,7 +580,11 @@ class BoreBarModel:
 
     @staticmethod
     def _evaluate_torsional_sigma_positive(params: dict, omega_pos: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
-        """Вычислить σ(iω) на физической положительной ветви."""
+        """
+        Вычисляет σ(iω) только на физической положительной ветви ω > 0.
+        Возвращает:
+            omega_pos, sigma_real_pos, sigma_imag_pos, delta1_effective
+        """
         params = BoreBarModel.validate_torsional_params(params)
 
         rho = float(params["rho"])
@@ -497,7 +636,9 @@ class BoreBarModel:
         sigma_real_pos: np.ndarray,
         sigma_imag_pos: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
-        """Собрать display-ветвь для GUI из физической положительной ветви."""
+        """
+        Строит display-ветвь для GUI.
+        """
         omega_pos = np.asarray(omega_pos, dtype=float)
         sigma_real_pos = np.asarray(sigma_real_pos, dtype=float)
         sigma_imag_pos = np.asarray(sigma_imag_pos, dtype=float)
@@ -584,7 +725,11 @@ class BoreBarModel:
 
     @staticmethod
     def build_torsional_plot_im0_from_result(result: dict, params: dict, semantic_im0: dict | None = None) -> dict:
-        """Подогнать plot-маркеры к той же sampled physical-ветви, что рисуется в GUI."""
+        """Построить plot-special-points по той же дискретной physical-ветви, что и полилиния.
+
+        Используется только для графического совмещения маркеров с отображаемой
+        sampled-ветвью: семантические special points модели и экспорта не меняются.
+        """
         omega = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
         sig_re = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
         sig_im = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
@@ -648,7 +793,7 @@ class BoreBarModel:
 
     @staticmethod
     def _augment_torsional_positive_branch_with_special_points(result: dict, params: dict, points: list[dict] | None) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-        """Вставить physical special points в положительную ветвь по порядку ω."""
+        """Вставить physical special points в положительную ветвь в порядке ω."""
         omega_pos = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
         re_pos = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
         im_pos = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
@@ -880,7 +1025,15 @@ class BoreBarModel:
         }
 
     def calculate_torsional(self, params: dict) -> dict:
-        """Рассчитать крутильную модель и вернуть физическую ветвь, display-ветвь и диагностику."""
+        """
+        Крутильные колебания.
+
+        Физическая модель считается только на ω > 0.
+        Если пользователь задал отрицательный диапазон, отображаемая ветвь
+        достраивается как сопряжённое отражение положительной.
+
+        Вся диагностика невалидных точек формируется в модели.
+        """
         params = self.validate_torsional_params(params)
 
         rho = float(params["rho"])
@@ -994,7 +1147,15 @@ class BoreBarModel:
 
     @staticmethod
     def _torsional_research_policy(params: dict) -> dict:
-        """Параметры исследовательского окна выбора критической точки."""
+        """
+        Правило выбора критической точки.
+
+        Политика параметризуема через:
+        - torsional_research_root_window_low
+        - torsional_research_root_window_high
+        - torsional_research_root_window_high_long
+        - torsional_research_long_length_threshold
+        """
         length = float(params.get("length", 0.0))
         low = float(params.get("torsional_research_root_window_low", 500.0))
         high_default = float(params.get("torsional_research_root_window_high", 2000.0))
@@ -1016,7 +1177,14 @@ class BoreBarModel:
 
     @staticmethod
     def _select_torsional_research_critical_point(points: list[dict], params: dict) -> tuple[dict | None, dict]:
-        """Выбрать критическую точку по исследовательскому правилу окна ω."""
+        """
+        Выбрать критическую точку по исследовательскому правилу.
+
+        Приоритеты выбора:
+        1) первая точка Im(σ)=0 в окне [omega_low, omega_high];
+        2) если в окне точек нет — первая точка с omega >= omega_low;
+        3) если и таких нет — просто первая точка из всего списка.
+        """
         policy = BoreBarModel._torsional_research_policy(params)
         if not points:
             return None, {**policy, "selection_status": "no_im0_points"}
@@ -1037,77 +1205,79 @@ class BoreBarModel:
 
     @staticmethod
     def find_torsional_im0_points(params: dict) -> dict:
-        """Найти пересечения Im(σ)=0 на физической положительной ветви."""
+        """Найти все пересечения Im(σ)=0 по физической положительной ветви."""
         model = BoreBarModel()
         res = model.calculate_torsional(params)
-
-        omega = np.asarray(res["physical_omega"], dtype=float)
-        sig_re = np.asarray(res["physical_sigma_real"], dtype=float)
-        sig_im = np.asarray(res["physical_sigma_imag"], dtype=float)
-
-        eps = float(params.get("im0_eps_torsional", 1e-9))
-        omega_tol = float(params.get("im0_omega_tol_torsional", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
-        re_tol = float(params.get("im0_re_tol_torsional", 1e-6))
-
-        def im_func(w):
-            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
-            return float(im_v[0])
-
-        def re_func(w):
-            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
-            return float(re_v[0])
-
-        dedup = BoreBarModel._build_zero_crossing_points(
-            omega, sig_re, sig_im,
-            zero_eps=eps,
-            omega_tol=omega_tol,
-            re_tol=re_tol,
-            refine_func=im_func,
-            re_eval_func=re_func,
-            re_key="re",
-        )
-
-        research_critical_point, policy_meta = BoreBarModel._select_torsional_research_critical_point(dedup, params)
-        minimum_re_critical_point = min(dedup, key=lambda p: p["re"]) if dedup else None
-
-        return {
-            "all_im0_points": dedup,
-            "research_critical_point": research_critical_point,
-            "minimum_re_critical_point": minimum_re_critical_point,
-            "points": dedup,
-            "source_curve": "physical_positive_branch",
-            "critical_selection_policy": policy_meta,
-        }
+        return model.find_torsional_im0_points_from_result(params, res)
 
     def find_torsional_im0_points_from_result(self, params: dict, result: dict) -> dict:
-        """Найти пересечения Im(σ)=0 по уже рассчитанной крутильной кривой."""
+        """
+        Найти пересечения Im(σ)=0 по уже рассчитанной физической ветви.
+
+        На плотной сетке special points сначала строятся по линейной интерполяции,
+        а дорогой refinement при необходимости применяется только к критической точке.
+        """
         omega = np.asarray(result.get("physical_omega", result.get("omega", [])), dtype=float)
         sig_re = np.asarray(result.get("physical_sigma_real", result.get("sigma_real", [])), dtype=float)
         sig_im = np.asarray(result.get("physical_sigma_imag", result.get("sigma_imag", [])), dtype=float)
 
         eps = float(params.get("im0_eps_torsional", 1e-9))
-        omega_tol = float(params.get("im0_omega_tol_torsional", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
+        omega_tol = float(params.get(
+            "im0_omega_tol_torsional",
+            max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9),
+        ))
         re_tol = float(params.get("im0_re_tol_torsional", 1e-6))
 
-        def im_func(w):
-            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
-            return float(im_v[0])
+        refine_all_points = self._should_refine_torsional_im0_points(params)
 
-        def re_func(w):
-            _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(params, np.asarray([w], dtype=float))
-            return float(re_v[0])
+        if refine_all_points:
+            def im_func(w):
+                _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(
+                    params,
+                    np.asarray([w], dtype=float),
+                )
+                return float(im_v[0])
 
-        dedup = BoreBarModel._build_zero_crossing_points(
-            omega, sig_re, sig_im,
-            zero_eps=eps,
-            omega_tol=omega_tol,
-            re_tol=re_tol,
-            refine_func=im_func,
-            re_eval_func=re_func,
-            re_key="re",
-        )
+            def re_func(w):
+                _, re_v, im_v, _ = BoreBarModel._evaluate_torsional_sigma_positive(
+                    params,
+                    np.asarray([w], dtype=float),
+                )
+                return float(re_v[0])
+
+            dedup = BoreBarModel._build_zero_crossing_points(
+                omega,
+                sig_re,
+                sig_im,
+                zero_eps=eps,
+                omega_tol=omega_tol,
+                re_tol=re_tol,
+                refine_func=im_func,
+                re_eval_func=re_func,
+                re_key="re",
+            )
+        else:
+            dedup = BoreBarModel._build_zero_crossing_points(
+                omega,
+                sig_re,
+                sig_im,
+                zero_eps=eps,
+                omega_tol=omega_tol,
+                re_tol=re_tol,
+                refine_func=None,
+                re_eval_func=None,
+                re_key="re",
+            )
 
         research_critical_point, policy_meta = BoreBarModel._select_torsional_research_critical_point(dedup, params)
+
+        critical_point_refined = False
+        if self._should_refine_torsional_critical_point(params):
+            refined_critical = self._refine_single_torsional_point(research_critical_point, params)
+            if refined_critical is not None:
+                research_critical_point = refined_critical
+                critical_point_refined = True
+
         minimum_re_critical_point = min(dedup, key=lambda p: p["re"]) if dedup else None
 
         return {
@@ -1116,7 +1286,11 @@ class BoreBarModel:
             "minimum_re_critical_point": minimum_re_critical_point,
             "points": dedup,
             "source_curve": "physical_positive_branch",
-            "critical_selection_policy": policy_meta,
+            "critical_selection_policy": {
+                **policy_meta,
+                "all_points_refined": bool(refine_all_points),
+                "critical_point_refined": bool(critical_point_refined),
+            },
         }
 
     # -------------------------------------------------------------------------
@@ -1125,7 +1299,21 @@ class BoreBarModel:
 
     @staticmethod
     def calculate_longitudinal(params: dict) -> dict:
-        """Рассчитать продольную SI-модель на общей частотной сетке."""
+        """
+        Продольные колебания: кривая D-разбиения (K₁, δ) в плоскости параметров.
+
+        В текущей версии проекта используется единая физически согласованная
+        SI-модель продольных колебаний:
+            a = sqrt(E / ρ),
+            x = ω L / a,
+            K₁(ω) = (E S / a) * ω * cot(x) / (1 - μ cos(ω τ)),
+            δ(ω)  = -(E S μ / a) * cot(x) * sin(ω τ) / (1 - μ cos(ω τ)).
+
+        Частотная сетка строится через build_frequency_grid(), поэтому анализ,
+        экспорт и поиск специальных точек опираются на один и тот же диапазон.
+        При необходимости пользовательская сетка может быть подана напрямую
+        через params["omega_override"].
+        """
         params = BoreBarModel.validate_longitudinal_params(params)
 
         E = float(params["E"])
@@ -1204,7 +1392,11 @@ class BoreBarModel:
         }
 
     def compute_longitudinal_curve(self, params: dict, omega: np.ndarray, return_diagnostics: bool = False):
-        """Вычислить массивы K1(ω) и δ(ω) на заданной сетке ω."""
+        """Вернуть массивы (K1(ω), δ(ω)) для заданного omega.
+
+        Нужен для экспорта и для поиска пересечений δ(ω)=0.
+        Формулы совпадают с calculate_longitudinal().
+        """
         params = self.validate_longitudinal_params(params)
 
         E = float(params["E"])
@@ -1300,7 +1492,11 @@ class BoreBarModel:
         return self.find_longitudinal_im0_points_from_result(params, res)
 
     def _select_longitudinal_research_critical_point(self, points: list[dict], params: dict) -> tuple[dict | None, dict]:
-        """Выбрать точку δ(ω)=0 с минимальным K1."""
+        """Выбрать исследовательскую критическую точку продольной модели.
+
+        Для согласованной SI-модели проекта критической считается точка δ(ω)=0
+        с минимальным значением K1 среди всех найденных пересечений.
+        """
         policy = {
             "kind": "minimum_K1_on_delta_zero_set",
             "criterion": "min_K1",
@@ -1315,7 +1511,21 @@ class BoreBarModel:
         return chosen, {**policy, "selection_status": "minimum_K1_point_selected"}
 
     def find_longitudinal_im0_points_from_result(self, params: dict, result: dict) -> dict:
-        """Найти пересечения δ(ω)=0 и выбрать критическую точку на общей сетке."""
+        """Найти все пересечения δ(ω)=0 и критическую точку на единой сетке.
+
+        Используется та же частотная сетка, что и для анализа/экспорта.
+        Сначала учитываются точные нули, попавшие в узлы сетки, затем —
+        интервалы смены знака между соседними узлами.
+
+        Единый контракт special points для проекта:
+        - points
+        - research_critical_point
+        - minimum_re_critical_point
+        - source_curve
+        - critical_selection_policy
+
+        Поле critical временно сохраняется только как alias для совместимости.
+        """
         omega = np.asarray(result["omega"], dtype=float)
         K1 = np.asarray(result["K1"], dtype=float)
         delta = np.asarray(result["delta"], dtype=float)
@@ -1359,7 +1569,12 @@ class BoreBarModel:
         }
 
     def _get_transverse_modal_data(self, params: dict) -> dict:
-        """Подготовить модальные коэффициенты поперечной модели."""
+        """
+        Вычислить модальные коэффициенты поперечной модели.
+
+        Поддерживается единственный пользовательский вариант формы:
+        - verified_cantilever_first_mode_phi: верифицированная 1-я собственная форма консольной балки.
+        """
         params = self.validate_transverse_params(params)
 
         E = float(params["E"])
@@ -1473,7 +1688,7 @@ class BoreBarModel:
         }
 
     def _evaluate_transverse_response(self, params: dict, omega: np.ndarray, modal: dict | None = None, *, return_full: bool = False):
-        """Низкоуровнево вычислить W(iω) на произвольной сетке ω."""
+        """Низкоуровневый расчёт W(iω) на произвольной сетке без повторной полной сборки модели."""
         params = self.validate_transverse_params(params)
         if modal is None:
             modal = self._get_transverse_modal_data(params)
@@ -1570,7 +1785,7 @@ class BoreBarModel:
         return payload
 
     def compute_transverse_curve(self, params: dict, omega: np.ndarray):
-        """Вернуть Re(W) и Im(W) на заданной сетке ω."""
+        """Вернуть (Re(W(iω)), Im(W(iω))) на заданной сетке omega."""
         modal = self._get_transverse_modal_data(params)
         result = self._evaluate_transverse_response(params, np.asarray(omega, dtype=float), modal=modal, return_full=False)
         return np.asarray(result["W_real"], dtype=float), np.asarray(result["W_imag"], dtype=float)
@@ -1580,7 +1795,10 @@ class BoreBarModel:
         return self.build_transverse_display_curve_from_result(params, base)
 
     def build_transverse_display_curve_from_result(self, params: dict, base: dict) -> dict:
-        """Построить более плотную display-кривую без пересборки модальной части."""
+        """
+        Построить более плотную сетку только для отображения годографа,
+        используя уже рассчитанную базовую кривую без повторной полной сборки модели.
+        """
         base_omega = np.asarray(base["omega"], dtype=float)
         factor = int(params.get("display_refinement_factor_transverse", params.get("display_refinement_factor", 8)))
         max_points = int(params.get("display_max_points_transverse", 25000))
@@ -1648,7 +1866,13 @@ class BoreBarModel:
         semantic_im0: dict | None = None,
         display_curve: dict | None = None,
     ) -> dict:
-        """Подогнать plot-маркеры к той же sampled display-кривой, что рисует GUI."""
+        """Построить plot-special-points по той же sampled display-кривой, что и GUI.
+
+        Это нужно не для изменения семантики critical point, а чтобы маркеры
+        попадали в ту же дискретизированную полилинию, которую пользователь видит
+        на экране. Иначе при плотной/перестроенной display-сетке точка может
+        визуально казаться «съехавшей» с годографа.
+        """
         if display_curve is None:
             display_curve = self.build_transverse_display_curve_from_result(params, result)
 
@@ -1699,7 +1923,12 @@ class BoreBarModel:
         }
 
     def calculate_transverse(self, params: dict) -> dict:
-        """Рассчитать поперечную модель на полной физической сетке с NaN-разрывами."""
+        """
+        Расчёт поперечных колебаний в одномодовой аппроксимации на полной сетке.
+
+        Невалидные точки не удаляются, а помечаются через NaN, чтобы график
+        имел корректные разрывы, а поиск пересечений не склеивал разные участки.
+        """
         params = self.validate_transverse_params(params)
 
         mu = float(params["mu"])
@@ -1796,7 +2025,20 @@ class BoreBarModel:
         return self.find_transverse_im0_points_from_result(params, res)
 
     def _select_transverse_research_critical_point(self, points: list[dict], params: dict) -> tuple[dict | None, dict]:
-        """Выбрать нетривиальное пересечение с отрицательной действительной осью."""
+        """Выбрать исследовательскую критическую точку поперечной модели.
+
+        Для поперечного исследования критическая точка должна соответствовать
+        нетривиальному пересечению годографа с *отрицательной* действительной
+        осью. Точка W=0 при ω≈0 и любые пересечения на положительной оси не
+        должны объявляться исследовательской критической точкой: это и давало
+        визуально неверный зелёный маркер у начала координат.
+
+        Поэтому политика жёсткая:
+        1) ищем только точки с ω > eps и Re(W) < -eps;
+        2) среди них берём самую левую;
+        3) если таких точек нет, исследовательская критическая точка считается
+           отсутствующей, а не подменяется origin/fallback-точкой.
+        """
         omega_eps = float(params.get("transverse_research_omega_eps", max(float(params.get("omega_step", 1.0)) * 0.5, 1e-9)))
         negative_re_eps = float(params.get("transverse_research_negative_re_eps", 1e-9))
         policy = {
@@ -1825,7 +2067,17 @@ class BoreBarModel:
         return chosen, {**policy, "selection_status": "minimum_negative_re_nontrivial_point_selected"}
 
     def find_transverse_im0_points_from_result(self, params: dict, res: dict) -> dict:
-        """Найти точки Im(W)=0 по уже рассчитанной поперечной кривой."""
+        """Найти Im(W)=0 по уже рассчитанной кривой без повторной полной сборки модели.
+
+        Единый контракт special points для проекта:
+        - points
+        - research_critical_point
+        - minimum_re_critical_point
+        - source_curve
+        - critical_selection_policy
+
+        Поле critical временно сохраняется только как alias для совместимости.
+        """
         params = self.validate_transverse_params(params)
         omega = np.asarray(res["omega"], dtype=float)
         Wre = np.asarray(res["W_real"], dtype=float)
