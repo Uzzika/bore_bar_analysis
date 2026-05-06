@@ -21,11 +21,6 @@ class StabilityDiagramPage(AnalysisPageBase):
     - крутильные колебания: прежняя диаграмма Re(σ(ω*)) от δ₁;
     - поперечные колебания: зависимость предельной глубины резания bкр
       от длины борштанги L или от времени запаздывания τ.
-
-    Для поперечной модели используется уже реализованный в BoreBarModel
-    годограф W(iω). Критической считается нетривиальная точка пересечения
-    годографа с отрицательной действительной осью. Предельная глубина
-    оценивается как bкр = -1 / Re(W*).
     """
 
     def __init__(self, main_window):
@@ -70,10 +65,6 @@ class StabilityDiagramPage(AnalysisPageBase):
         left.addStretch()
         self._build_analysis_layout(left_card, result_card)
         self._update_visible_parameter_groups()
-
-    # ------------------------------------------------------------------
-    # UI helpers
-    # ------------------------------------------------------------------
 
     def _add_labeled_widget(self, layout, label_text: str, widget):
         label = QLabel(label_text)
@@ -131,6 +122,13 @@ class StabilityDiagramPage(AnalysisPageBase):
             self.torsion_omega_end_input,
             self.torsion_omega_step_input,
         )
+
+        self.torsion_show_stable_region_cb = QCheckBox("Показывать область устойчивости D(0)")
+        self.torsion_show_stable_region_cb.setChecked(True)
+        self.torsion_show_crosses_cb = QCheckBox("Показывать крестики внутри устойчивой области")
+        self.torsion_show_crosses_cb.setChecked(True)
+        layout.addWidget(self.torsion_show_stable_region_cb)
+        layout.addWidget(self.torsion_show_crosses_cb)
         return group
 
     def _build_transverse_group(self) -> QWidget:
@@ -193,6 +191,13 @@ class StabilityDiagramPage(AnalysisPageBase):
             self.trans_omega_end_input,
             self.trans_omega_step_input,
         )
+
+        self.trans_show_stable_region_cb = QCheckBox("Показывать область устойчивости D(0)")
+        self.trans_show_stable_region_cb.setChecked(True)
+        self.trans_show_crosses_cb = QCheckBox("Показывать крестики внутри устойчивой области")
+        self.trans_show_crosses_cb.setChecked(True)
+        layout.addWidget(self.trans_show_stable_region_cb)
+        layout.addWidget(self.trans_show_crosses_cb)
         return group
 
     def _toggle_torsion_length_mode(self, checked: bool):
@@ -219,10 +224,6 @@ class StabilityDiagramPage(AnalysisPageBase):
         self.trans_taus_label.setVisible(not by_length)
         self.trans_taus_input.setVisible(not by_length)
 
-    # ------------------------------------------------------------------
-    # Parsing helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _parse_positive_list(text: str, value_name: str) -> list[float]:
         raw = text.strip().replace(";", ",")
@@ -245,10 +246,6 @@ class StabilityDiagramPage(AnalysisPageBase):
         if not np.isfinite(value) or value <= 0.0:
             raise ValueError(f"Параметр {value_name} должен быть > 0.")
         return value
-
-    # ------------------------------------------------------------------
-    # Torsional diagram
-    # ------------------------------------------------------------------
 
     def _torsion_base_params(self) -> dict:
         return {
@@ -273,16 +270,6 @@ class StabilityDiagramPage(AnalysisPageBase):
 
     def _find_torsional_diagram_critical_point(self, params: dict) -> dict | None:
         """Найти точку для крутильной диаграммы устойчивости.
-
-        Для диаграммы устойчивости нельзя ограничиваться пользовательской
-        частотной сеткой omega_start..omega_end. В исходном Matlab-расчёте
-        корень для Sigma(I,J) ищется функцией fzero в исследовательском окне:
-        [500; 2000] для L < 5.5 м и [500; 1000] для длинной борштанги.
-
-        Поэтому здесь корень Im(σ(iω))=0 ищется напрямую в этом окне.
-        Поля omega_start, omega_end и omega_step остаются параметрами
-        отображения/дискретизации, но не должны отрезать физически нужный
-        корень диаграммы устойчивости.
         """
         params = self.model.validate_torsional_params(params)
         policy = self.model._torsional_research_policy(params)
@@ -385,8 +372,9 @@ class StabilityDiagramPage(AnalysisPageBase):
         ax = self.figure.add_subplot(111)
 
         styles = ["-o", "-.x", "--d", "--s", "--*"]
+        plotted_items = []
         for idx, item in enumerate(payload["series"]):
-            ax.plot(
+            line, = ax.plot(
                 item["re_sigma"],
                 item["delta1_scaled"],
                 styles[idx % len(styles)],
@@ -394,9 +382,18 @@ class StabilityDiagramPage(AnalysisPageBase):
                 markersize=5,
                 label=f"L = {item['length']:g} м",
             )
+            plotted_items.append((line, item))
 
-        if len(payload["series"]) > 1:
-            ax.legend()
+        stable_label = None
+        if self.torsion_show_stable_region_cb.isChecked():
+            stable_label = self._draw_torsional_stable_region(ax, payload, plotted_items)
+
+        handles, labels = ax.get_legend_handles_labels()
+        if stable_label is not None:
+            handles.append(stable_label[0])
+            labels.append(stable_label[1])
+        if handles:
+            ax.legend(handles, labels)
 
         self._style_plot_axes(
             ax,
@@ -406,9 +403,88 @@ class StabilityDiagramPage(AnalysisPageBase):
         )
         self.canvas.draw()
 
-    # ------------------------------------------------------------------
-    # Transverse diagram
-    # ------------------------------------------------------------------
+    def _draw_torsional_stable_region(self, ax, payload: dict, plotted_items: list[tuple]):
+        if not plotted_items:
+            return None
+
+        y = np.asarray(payload["series"][0]["delta1_scaled"], dtype=float)
+        x_rows = [np.asarray(item["re_sigma"], dtype=float) for _, item in plotted_items]
+        x_matrix = np.vstack(x_rows)
+        envelope = np.nanmax(x_matrix, axis=0)
+        finite_mask = np.isfinite(y) & np.isfinite(envelope)
+        if np.count_nonzero(finite_mask) < 2:
+            return None
+
+        y_f = y[finite_mask]
+        env_f = envelope[finite_mask]
+        x_min = float(np.nanmin(x_matrix))
+        x_max = float(np.nanmax(x_matrix))
+        span = max(abs(x_max - x_min), 1.0)
+        x_right = max(0.0, x_max + 0.18 * span)
+
+        hatch_artist = ax.fill_betweenx(
+            y_f,
+            env_f,
+            x_right,
+            facecolor="#d8ecff",
+            edgecolor="#6a90b6",
+            linewidth=0.0,
+            alpha=0.22,
+            hatch="///",
+            zorder=0,
+        )
+
+        if self.torsion_show_crosses_cb.isChecked():
+            y_sorted_idx = np.argsort(y_f)
+            y_sorted = y_f[y_sorted_idx]
+            env_sorted = env_f[y_sorted_idx]
+            y_grid = np.linspace(float(np.min(y_sorted)), float(np.max(y_sorted)), 7)
+            cross_x = []
+            cross_y = []
+            pad_x = 0.05 * span
+            for y0 in y_grid:
+                x_left = float(np.interp(y0, y_sorted, env_sorted))
+                inner_left = x_left + pad_x
+                inner_right = x_right - pad_x
+                if inner_right <= inner_left:
+                    continue
+                for x0 in np.linspace(inner_left, inner_right, 4):
+                    cross_x.append(float(x0))
+                    cross_y.append(float(y0))
+            if cross_x:
+                ax.scatter(
+                    cross_x,
+                    cross_y,
+                    marker="x",
+                    s=28,
+                    linewidths=1.0,
+                    color="#4e647b",
+                    alpha=0.9,
+                    zorder=1,
+                )
+
+        y_span = max(float(np.max(y_f) - np.min(y_f)), 1e-6)
+        text_y = float(np.max(y_f) - 0.12 * y_span)
+        text_x = float(np.nanmax(env_f) + 0.22 * (x_right - np.nanmax(env_f)))
+        ax.text(
+            text_x,
+            text_y,
+            "Область устойчивости D(0)",
+            fontsize=9.5,
+            color="#27496d",
+            bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#c7d9eb", "alpha": 0.9},
+            zorder=2,
+        )
+
+        left_bound = x_min - 0.12 * span
+        y_pad = max(0.08 * y_span, 0.2)
+        ax.set_xlim(left_bound, x_right)
+        ax.set_ylim(float(np.min(y_f)) - y_pad, float(np.max(y_f)) + y_pad)
+
+        descriptor = "Устойчивая область D(0)"
+        if len(plotted_items) > 1:
+            descriptor = "Общая устойчивая область D(0)"
+        return hatch_artist, descriptor
 
     def _transverse_base_params(self) -> dict:
         return {
@@ -499,15 +575,87 @@ class StabilityDiagramPage(AnalysisPageBase):
     def _plot_transverse_diagram(self, payload: dict):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
+
+        x = np.asarray(payload["x"], dtype=float)
+        b_mm = np.asarray(payload["b_critical_mm"], dtype=float)
+        finite = np.isfinite(x) & np.isfinite(b_mm) & (b_mm > 0.0)
+
+        stable_label = None
+        unstable_label = None
+        if np.count_nonzero(finite) >= 2:
+            x_f = x[finite]
+            b_f = b_mm[finite]
+            order = np.argsort(x_f)
+            x_f = x_f[order]
+            b_f = b_f[order]
+
+            ymax = float(np.max(b_f))
+            y_top = ymax * 1.22 if ymax > 0.0 else 1.0
+
+            if self.trans_show_stable_region_cb.isChecked():
+                stable_artist = ax.fill_between(
+                    x_f,
+                    0.0,
+                    b_f,
+                    facecolor="#d8ecff",
+                    edgecolor="#6a90b6",
+                    linewidth=0.0,
+                    alpha=0.25,
+                    hatch="///",
+                    zorder=0,
+                )
+                stable_label = (stable_artist, "Устойчивая область D(0)")
+
+            if self.trans_show_crosses_cb.isChecked():
+                cross_x = []
+                cross_y = []
+                for x0, b0 in zip(x_f, b_f):
+                    for frac in (0.25, 0.50, 0.75):
+                        cross_x.append(float(x0))
+                        cross_y.append(float(b0 * frac))
+                if cross_x:
+                    ax.scatter(
+                        cross_x,
+                        cross_y,
+                        marker="x",
+                        s=30,
+                        linewidths=1.0,
+                        color="#4e647b",
+                        alpha=0.9,
+                        zorder=1,
+                    )
+
+            text_x = float(x_f[len(x_f) // 2])
+            text_y = float(np.interp(text_x, x_f, b_f) * 0.45)
+            ax.text(
+                text_x,
+                text_y,
+                "D(0): устойчиво",
+                fontsize=9.5,
+                color="#27496d",
+                ha="center",
+                bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "#c7d9eb", "alpha": 0.9},
+                zorder=2,
+            )
+
         ax.plot(
-            payload["x"],
-            payload["b_critical_mm"],
+            x,
+            b_mm,
             "-o",
             linewidth=1.8,
             markersize=5,
-            label="bкр",
+            label="граница bкр",
+            zorder=3,
         )
-        ax.legend()
+
+        handles, labels = ax.get_legend_handles_labels()
+        for item in (stable_label, unstable_label):
+            if item is not None:
+                handles.append(item[0])
+                labels.append(item[1])
+        if handles:
+            ax.legend(handles, labels)
+
         self._style_plot_axes(
             ax,
             payload["title"],
@@ -515,10 +663,6 @@ class StabilityDiagramPage(AnalysisPageBase):
             "Предельная глубина резания bкр (мм)",
         )
         self.canvas.draw()
-
-    # ------------------------------------------------------------------
-    # Summary and run
-    # ------------------------------------------------------------------
 
     def _update_result_summary(self, payload: dict):
         if payload.get("kind") == "torsional":
@@ -529,6 +673,8 @@ class StabilityDiagramPage(AnalysisPageBase):
                 f"Количество найденных точек: {int(payload.get('total_valid_points', 0))}",
                 "Ось X: Re(σ(ω*))",
                 "Ось Y: δ₁ · 10⁻⁶ с",
+                "Каждая кривая является границей устойчивости.",
+                "Заштрихованная область справа показывает устойчивую область D(0).",
             ]
         else:
             finite_b = np.asarray(payload.get("b_critical_mm", []), dtype=float)
@@ -547,6 +693,8 @@ class StabilityDiagramPage(AnalysisPageBase):
                 range_line,
                 "Ось X: варьируемый параметр L или τ",
                 "Ось Y: bкр = -1 / Re(W*)",
+                "Кривая bкр является границей устойчивости.",
+                "Область ниже кривой соответствует устойчивым режимам, область выше — неустойчивым.",
             ]
         self._set_results_text("\n".join(lines))
 
