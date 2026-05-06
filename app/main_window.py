@@ -7,6 +7,7 @@ from app.ui.longitudinal_page import LongitudinalPage
 from app.ui.transverse_page import TransversePage
 from app.ui.help_page import HelpPage
 from app.ui.algorithm_page import AlgorithmPage
+from app.ui.stability_diagram_page import StabilityDiagramPage
 
 
 APP_STYLESHEET = """
@@ -77,7 +78,7 @@ QScrollArea#leftPanelScroll {
 
 class MainWindow(QMainWindow):
     MIN_WIDTH = 1080
-    MIN_HEIGHT = 280
+    MIN_HEIGHT = 400
     CHROME_W = 56
     CHROME_H = 94
 
@@ -100,6 +101,7 @@ class MainWindow(QMainWindow):
         self.transverse = TransversePage(self)
         self.help_page = HelpPage(self)
         self.algorithm_page = AlgorithmPage(self)
+        self.stability_diagram_page = StabilityDiagramPage(self)
 
         self.pages = [
             self.menu,
@@ -108,6 +110,7 @@ class MainWindow(QMainWindow):
             self.transverse,
             self.help_page,
             self.algorithm_page,
+            self.stability_diagram_page,
         ]
 
         for page in self.pages:
@@ -128,6 +131,7 @@ class MainWindow(QMainWindow):
             self.transverse: "Раздел: поперечные колебания",
             self.help_page: "Раздел: справка",
             self.algorithm_page: "Раздел: алгоритм работы",
+            self.stability_diagram_page: "Раздел: диаграммы устойчивости",
         }
         self.status.showMessage(names.get(widget, "Готово"))
         self._fit_window_to_page(widget, force=True)

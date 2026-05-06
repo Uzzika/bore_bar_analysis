@@ -69,6 +69,11 @@ class MenuPage(QWidget):
                 lambda: main_window.switch(main_window.transverse),
             ),
             (
+                "Диаграммы устойчивости",
+                "Сравнение границы устойчивости для крутильных и поперечных колебаний.",
+                lambda: main_window.switch(main_window.stability_diagram_page),
+            ),
+            (
                 "Справка",
                 "Краткое описание программы и её возможностей.",
                 lambda: main_window.switch(main_window.help_page),
